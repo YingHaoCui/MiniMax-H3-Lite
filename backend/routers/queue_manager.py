@@ -15,6 +15,7 @@ import random
 import threading
 import time
 import traceback
+from contextlib import closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -50,6 +51,7 @@ STATUS_FAILED = "failed"
 _queue: list[str] = []
 _lock = threading.Lock()
 _worker_started = False
+_scheduled: set[str] = set()
 
 
 def queue_depth() -> int:
@@ -124,7 +126,8 @@ def resume_unfinished_tasks() -> list[str]:
     db = get_db()
     try:
         rows = db.execute(
-            "SELECT id, shot_id FROM generation_tasks WHERE status IN (?, ?)",
+            "SELECT id, shot_id FROM generation_tasks WHERE status IN (?, ?) "
+            "OR (status='failed' AND remote_job_id IS NOT NULL AND remote_phase IN ('polling','downloading'))",
             (STATUS_PENDING, STATUS_PROCESSING),
         ).fetchall()
         restored: list[str] = []
@@ -163,6 +166,9 @@ def resume_unfinished_tasks() -> list[str]:
 def enqueue(task_id: str):
     """将任务 ID 入队，启动 Worker 线程（懒启动）"""
     with _lock:
+        if task_id in _scheduled:
+            return
+        _scheduled.add(task_id)
         _queue.append(task_id)
         global _worker_started
         if not _worker_started:
@@ -175,9 +181,15 @@ def _worker_loop():
     """主 Worker 循环：从队列取任务，受限并发执行"""
     import concurrent.futures
 
-    pool = concurrent.futures.ThreadPoolExecutor(max_workers=settings.MAX_CONCURRENCY)
-
+    from settings_store import resolve
+    capacity = max(1, int(resolve("max_concurrency", settings.MAX_CONCURRENCY)))
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=capacity)
+    running = set()
     while True:
+        running = {future for future in running if not future.done()}
+        if len(running) >= capacity:
+            concurrent.futures.wait(running, timeout=0.3, return_when=concurrent.futures.FIRST_COMPLETED)
+            continue
         tid = None
         with _lock:
             if _queue:
@@ -185,7 +197,20 @@ def _worker_loop():
         if tid is None:
             time.sleep(0.3)
             continue
-        pool.submit(_run_task, tid)
+        running.add(pool.submit(_run_scheduled, tid))
+
+
+def _run_scheduled(task_id):
+    try:
+        _run_task(task_id)
+    except Exception:
+        logger.exception("Unexpected worker failure: %s", task_id)
+        with closing(get_db()) as db, db:
+            db.execute("UPDATE generation_tasks SET status='failed', error='Worker failure' WHERE id=?", (task_id,))
+            db.execute("UPDATE shots SET status='failed' WHERE id=(SELECT shot_id FROM generation_tasks WHERE id=?)", (task_id,))
+    finally:
+        with _lock:
+            _scheduled.discard(task_id)
 
 
 class _InferenceTimeout(Exception):
@@ -193,8 +218,8 @@ class _InferenceTimeout(Exception):
     pass
 
 
-def _run_with_timeout(task_id: str):
-    """在独立线程跑推理并施加 ``INFERENCE_TIMEOUT`` 上限。
+def _run_with_timeout(task_id: str, *, remote: bool = False):
+    """本地推理在独立线程施加 ``INFERENCE_TIMEOUT``；远程适配器自行管理时间预算。
 
     运维稳定性评估发现：原 ``TASK_TIMEOUT``（config.py）是死配置、全仓零消费，
     默认推理路径（diffusers / vllm-omni）无任何超时强制 → 推理线程挂死会永久占用
@@ -204,6 +229,8 @@ def _run_with_timeout(task_id: str):
     挂死线程作为孤儿残留占用 GPU 槽，需重启服务由其 startup resume 兜底。
     """
     import concurrent.futures
+    if remote:
+        return run_inference(task_id)
 
     ex = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="infer")
     fut = ex.submit(run_inference, task_id)
@@ -236,13 +263,16 @@ def _run_task(task_id: str):
     request_id = _payload.get("request_id") if isinstance(_payload, dict) else None
     log_extra = {"task_id": task_id, "request_id": request_id}
 
+    from engine_registry import active_backend
+    remote = bool(row["remote_endpoint"]) or active_backend() == "vllm-omni"
+    retry_max = 0 if remote else settings.TASK_RETRY_MAX
     retry_count = 0
-    while retry_count <= settings.TASK_RETRY_MAX:
+    while retry_count <= retry_max:
         # 槽位守卫（评估 P1-3）：存在超时孤儿推理线程时不再启动新推理——
         # 挂死线程仍占用 GPU 槽，继续提交会与孤儿争用显存导致静默 OOM / 二次挂死。
         # 选择 fail-fast + 可操作指引（重启回收，startup resume 兜底）而非静默排队。
         orphans = runtime_state.orphan_inference_count()
-        if orphans > 0:
+        if orphans > 0 and not remote:
             reason = (
                 f"检测到 {orphans} 个超时孤儿推理线程仍占用 GPU 槽，已拒绝启动新推理；"
                 "请重启服务回收（启动时自动 resume 未完成任务）"
@@ -261,7 +291,7 @@ def _run_task(task_id: str):
             return
         # 标记 processing
         db.execute(
-            "UPDATE generation_tasks SET status=?, progress=0, error=NULL WHERE id=?",
+            "UPDATE generation_tasks SET status=?, error=NULL WHERE id=?",
             (STATUS_PROCESSING, task_id),
         )
         db.execute("UPDATE shots SET status='processing' WHERE id=?", (row["shot_id"],))
@@ -287,7 +317,7 @@ def _run_task(task_id: str):
 
         try:
             # 调用推理（带 INFERENCE_TIMEOUT 超时强制）
-            result = _run_with_timeout(task_id)
+            result = _run_with_timeout(task_id, remote=remote)
         except _InferenceTimeout as e:
             reason = (
                 f"推理超时（超过 INFERENCE_TIMEOUT={settings.INFERENCE_TIMEOUT}s）"
@@ -315,7 +345,7 @@ def _run_task(task_id: str):
             err_msg = f"{type(e).__name__}: {e}"
             traceback.print_exc()
             retry_count += 1
-            if retry_count <= settings.TASK_RETRY_MAX:
+            if retry_count <= retry_max:
                 # 落盘本 Worker 线程的完整 traceback，携 task_id 前缀供 logs/backend.log 回放
                 logger.exception(
                     "task_id=%s 推理失败，重试 %s/%s：%s",

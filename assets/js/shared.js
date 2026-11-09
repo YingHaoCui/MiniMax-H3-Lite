@@ -158,7 +158,7 @@ var SHOT_REFS={};       /* shot_id -> [{id,kind,mime,name}] */
 var i2vMap={};          /* shot_id -> {first:assetId|null, last:assetId|null} */
 var pathMap={};         /* assetId -> asset.path（会话内缩略图用） */
 var segs=[];
-var pollTimer=null,ctxTimer=null;
+var taskPolls={}, shotTasks={},ctxTimer=null;
 
 var promptInput=$('promptInput'),charCount=$('charCount');
 /* 提示词长度上限。必须与 backend/routers/generations.py 的
@@ -303,13 +303,17 @@ function selectShot(seg){
   var slateShot=$('slateShot');if(slateShot)slateShot.textContent='SHOT '+s;
   var tvSrc=$('tvSrc');if(tvSrc)tvSrc.textContent='SRC · SHOT '+s;
   var slateTc=$('slateTc');if(slateTc)slateTc.textContent='00:00:'+('0'+(dur-1)).slice(-2)+'.00';
-  var pbShot=$('pbShot');if(pbShot)pbShot.innerHTML=name+'<small>SHOT '+s+' · 0:'+d+'</small>';
+  var pbShot=$('pbShot');if(pbShot)pbShot.innerHTML=escapeHtml(name)+'<small>SHOT '+s+' · 0:'+d+'</small>';
   var pbTime=$('pbTime');if(pbTime)pbTime.textContent='00:00.0 / 00:'+d;
   promptInput.value=seg.dataset.prompt;
   updateCount();
   readbackParams(seg);
   if(PAGE.id==='i2v')renderFrameSlots();
   if(PAGE.id==='r2v')renderRefs(seg.dataset.id);
+  showResult(seg.dataset.resultPath||null);
+  var currentTask=shotTasks[seg.dataset.id];
+  if(currentTask)renderTask(currentTask);
+  else {genStatus.textContent='就绪';genStatus.classList.remove('done');stageScene.classList.remove('genning');}
 }
 
 function readbackParams(seg){
@@ -372,7 +376,8 @@ function readbackParams(seg){
 }
 
 function loadProjectShots(pid,selectId){
-  fetch(API_BASE+'/projects/'+pid+'/shots').then(function(r){return r.json();}).then(function(shots){
+  return fetch(API_BASE+'/projects/'+pid+'/shots').then(function(r){return r.json();}).then(function(shots){
+    if(pid!==currentProjectId)return;
     var tl=$('tlSegments');
     var ctl=tl.querySelector('.tl-ctl');
     var ph=tl.querySelector('.playhead');
@@ -392,16 +397,22 @@ function loadProjectShots(pid,selectId){
       node.dataset.prompt=s.prompt;
       node.dataset.mode=s.mode||'text';
       node.dataset.params=JSON.stringify(s.params||{});
+      node.dataset.resultPath=s.result_path||'';
+      if(s.latest_task){
+        var restored=Object.assign({shot_id:s.id},s.latest_task);
+        shotTasks[s.id]=restored;
+        if(restored.status==='pending'||restored.status==='processing')pollTask(restored.id,s.id);
+      }
       node.setAttribute('data-component','timeline-segment');
       node.setAttribute('role','button');
       node.setAttribute('tabindex','0');
       node.setAttribute('aria-selected','false');
       var no=('0'+(i+1)).slice(-2);
       var d=('0'+s.duration).slice(-2);
-      node.innerHTML='<div class="sf"><span class="no">'+no+'</span><span class="dur">0:'+d+'</span></div><div class="nm"><b>'+s.name+'</b><span class="seg-mode">'+(MODE_LABEL[s.mode]||'T2V')+'</span></div>';
+      node.innerHTML='<div class="sf"><span class="no">'+no+'</span><span class="dur">0:'+d+'</span></div><div class="nm"><b>'+escapeHtml(s.name)+'</b><span class="seg-mode">'+(MODE_LABEL[s.mode]||'T2V')+'</span></div>';
       tl.insertBefore(node,addBtn);
       bindSeg(node);
-      SHOT_REFS[s.id]=(s.refs||[]).map(function(r){return {id:r.id,kind:r.kind,mime:r.mime,name:r.name,paired_video:r.paired_video};});
+      SHOT_REFS[s.id]=(s.refs||[]).map(function(r){if(r.path)pathMap[r.id]=r.path;return {id:r.id,kind:r.kind,mime:r.mime,name:r.name,paired_video:r.paired_video,path:r.path,width:r.width,height:r.height};});
     });
     segs=[].slice.call(document.querySelectorAll('.seg[data-shot]'));
     sizeSegs();
@@ -426,7 +437,7 @@ function loadProjectShots(pid,selectId){
 function i2vSlotsFor(sid){
   var shot=findShot(sid);
   var p={};
-  try{p=JSON.parse(shot.dataset.params||'{}');}catch(e){}
+  try{p=JSON.parse(shot?shot.dataset.params||'{}':'{}');}catch(e){}
   var map=p.i2v||{};
   var imgs=(SHOT_REFS[sid]||[]).filter(function(r){return r.kind==='image';});
   var mode=shot?shot.dataset.mode:'first_frame';
@@ -699,7 +710,8 @@ function submitGeneration(){
     if(mode==='first_frame'&&!i2v.first){mmh3Toast('首帧模式需先上传首帧图像');return;}
     if(mode==='last_frame'&&!i2v.last){mmh3Toast('末帧模式需先上传末帧图像');return;}
     if(mode==='first_last'&&(!i2v.first||!i2v.last)){mmh3Toast('首尾帧模式需上传首帧与末帧各一张图像');return;}
-    refIds=[i2v.first,i2v.last].filter(Boolean);
+    params.i2v=i2v;
+    refIds=(mode==='first_frame'?[i2v.first]:(mode==='last_frame'?[i2v.last]:[i2v.first,i2v.last])).filter(Boolean);
   }else if(PAGE.id==='r2v'){
     var refs=SHOT_REFS[sid]||[];
     refIds=refs.map(function(r){return r.id;});
@@ -710,12 +722,14 @@ function submitGeneration(){
   queueItem.style.fontWeight='700';
   setGenState('提交中…',false);
   premiere(('0'+(+seg.dataset.shot+1)).slice(-2));
-  var upd={prompt:promptInput.value,mode:mode,duration:params.duration||8,aspect:params.aspect||'16:9',params:params};
+  var submittedPrompt=promptInput.value;
+  var upd={prompt:submittedPrompt,mode:mode,duration:params.duration||8,aspect:params.aspect||'16:9',params:params};
   fetch(API_BASE+'/shots/'+sid,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(upd)})
     .then(function(r){return r.json();})
-    .catch(function(){return null;})
-    .then(function(){
-      return fetch(API_BASE+'/generations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({shot_id:sid,mode:mode,prompt:promptInput.value,params:params,ref_ids:refIds})});
+    .then(function(updated){
+      if(updated.detail)throw new Error(updated.detail);
+      seg.dataset.params=JSON.stringify(params);seg.dataset.prompt=submittedPrompt;seg.dataset.mode=mode;
+      return fetch(API_BASE+'/generations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({shot_id:sid,mode:mode,prompt:submittedPrompt,params:params,ref_ids:refIds})});
     })
     .then(function(r){return r.json();})
     .then(function(task){
@@ -724,47 +738,59 @@ function submitGeneration(){
         queueItem.textContent='QUEUE 0 · 0';queueItem.style.fontWeight='';
         return;
       }
-      setGenState('生成中 · 推理执行中',false);
-      pollTask(task.id);
+      task.shot_id=sid;shotTasks[sid]=task;
+      renderTask(task);
+      pollTask(task.id,sid);
     })
     .catch(function(){
       setGenState('提交失败: 后端连接失败',true);
       queueItem.textContent='QUEUE 0 · 0';queueItem.style.fontWeight='';
     });
 }
-function pollTask(taskId){
-  clearTimeout(pollTimer);
-  pollTimer=setTimeout(function(){
+function showResult(path){
+  var old=stageScene.querySelector('video');
+  if(old)old.remove();
+  if(!path)return;
+  var v=document.createElement('video');
+  v.src=API_ORIGIN+'/'+path;
+  v.style.cssText='position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:1';
+  v.controls=true;v.loop=true;v.muted=true;
+  stageScene.appendChild(v);
+}
+function renderTask(task){
+  var pending=Object.keys(shotTasks).filter(function(sid){var status=shotTasks[sid].status;return status==='pending'||status==='processing';}).length;
+  queueItem.textContent='QUEUE '+pending+' · '+pending;
+  queueItem.style.fontWeight=pending?'700':'';
+  if(activeShotId()!==task.shot_id)return;
+  if(task.status==='processing')setGenState('生成中 · '+(task.progress||0)+'%',false);
+  else if(task.status==='pending')setGenState('等待执行…',false);
+  else {
+    genStatus.classList.add('done');
+    genStatus.textContent=task.status==='completed'?'生成完成 ✓':'生成失败: '+(task.error||'未知错误');
+    stageScene.classList.remove('genning');
+    if(task.result_path)showResult(task.result_path);
+  }
+}
+function pollTask(taskId,shotId){
+  if(taskPolls[taskId])return;
+  taskPolls[taskId]=setTimeout(function(){
     fetch(API_BASE+'/generations/'+taskId)
-      .then(function(r){return r.json();})
+      .then(function(r){if(r.status===404)return {id:taskId,shot_id:shotId,status:'failed',error:'任务已删除或不存在'};if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
       .then(function(task){
-        if(task.status==='processing'){
-          setGenState('生成中 · '+(task.progress||0)+'%',false);
-          pollTask(taskId);
-        }else if(task.status==='completed'){
-          queueItem.textContent='QUEUE 0 · 0';
-          queueItem.style.fontWeight='';
-          setGenState('生成完成 ✓',true);
-          if(task.result_path){
-            var v=document.createElement('video');
-            v.src=API_ORIGIN+'/'+task.result_path;
-            v.style.cssText='position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0';
-            v.loop=true;v.muted=true;v.autoplay=true;
-            var old=stageScene.querySelector('video');
-            if(old)old.remove();
-            stageScene.appendChild(v);
-          }
-          setTimeout(function(){stageScene.classList.remove('genning');},1400);
-        }else if(task.status==='failed'){
-          queueItem.textContent='QUEUE 0 · 0';
-          queueItem.style.fontWeight='';
-          setGenState('生成失败: '+(task.error||'未知错误'),true);
-          setTimeout(function(){stageScene.classList.remove('genning');},2000);
-        }else{
-          pollTask(taskId);
-        }
+        delete taskPolls[taskId];
+        task.shot_id=task.shot_id||shotId;
+        shotTasks[task.shot_id]=task;
+        var seg=findShot(task.shot_id);
+        if(seg&&task.result_path)seg.dataset.resultPath=task.result_path;
+        renderTask(task);
+        if(task.status==='pending'||task.status==='processing')pollTask(taskId,task.shot_id);
+        else if(currentProjectId)loadHistory(currentProjectId);
       })
-      .catch(function(){setGenState('查询任务失败: 后端连接失败',true);});
+      .catch(function(){
+        delete taskPolls[taskId];
+        if(activeShotId()===shotId)genStatus.textContent='连接中断，正在重试查询…';
+        pollTask(taskId,shotId);
+      });
   },1000);
 }
 
@@ -780,8 +806,13 @@ function loadHistory(pid){
     items.forEach(function(it){
       var d=document.createElement('div');
       d.className='history-item';
-      var thumb=it.result_path?'<img src="'+API_ORIGIN+'/'+it.result_path+'" alt="">':'';
-      d.innerHTML='<div class="history-thumb">'+thumb+'</div><div class="history-info"><div class="hi-name">'+escapeHtml(it.name||it.shot_name||'镜头')+'</div><div class="hi-meta">'+(it.mode||'')+' · '+(it.duration||'')+'s · '+escapeHtml(it.created_at||'')+'</div><div class="hi-reuse">复用参数重新生成</div></div>';
+      var thumb=(it.meta&&it.meta.thumbnail)?'<img src="'+API_ORIGIN+'/'+it.meta.thumbnail+'" alt="视频缩略图">':'';
+      d.innerHTML='<div class="history-thumb">'+thumb+'</div><div class="history-info"><div class="hi-name">'+escapeHtml(it.name||it.shot_name||'镜头')+'</div><div class="hi-meta">'+(it.mode||'')+' · '+(it.duration||'')+'s · '+escapeHtml(it.created_at||'')+'</div><div class="hi-reuse">点击查看结果</div></div>';
+      if(it.result_path){
+        d.addEventListener('click',function(){showResult(it.result_path);stageScene.classList.remove('genning');});
+        var download=document.createElement('a');download.href=API_ORIGIN+'/'+it.result_path;download.download='';download.textContent='下载';
+        download.addEventListener('click',function(e){e.stopPropagation();});d.appendChild(download);
+      }
       body.appendChild(d);
     });
   }).catch(function(){});
@@ -823,7 +854,7 @@ function loadEngines(){
       if(e.implemented&&!e.active&&!d.locked){
         it.addEventListener('click',function(){
           fetch(API_BASE+'/engine/switch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({backend:e.name})})
-            .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+            .then(function(r){if(r.status===404)return {id:taskId,shot_id:shotId,status:'failed',error:'任务已删除或不存在'};if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
             .then(function(){toggleEngineMenu(false);loadEngines();checkHealth();})
             .catch(function(){mmh3Toast('引擎切换失败');toggleEngineMenu(false);});
         });

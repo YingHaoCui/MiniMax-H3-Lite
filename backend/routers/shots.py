@@ -46,7 +46,7 @@ def list_shots(pid: str):
     # 附带每个镜头的参考素材（assets 信息，供前端渲染素材列表与提交 ref_ids）
     for shot in shots:
         refs = db.execute(
-            """SELECT a.id, a.kind, a.mime, a.meta, r.pair_asset_id
+            """SELECT a.id, a.kind, a.mime, a.meta, a.path, r.pair_asset_id
                FROM shot_refs r JOIN assets a ON a.id = r.asset_id
                WHERE r.shot_id=? ORDER BY r.ord""",
             (shot["id"],),
@@ -63,11 +63,19 @@ def list_shots(pid: str):
                 "id": r["id"],
                 "kind": r["kind"],
                 "mime": r["mime"],
+                "path": r["path"],
                 "name": meta.get("original_name") or r["id"],
                 "paired_video": r["pair_asset_id"] if r["pair_asset_id"] else None,
                 "width": meta.get("width"),
                 "height": meta.get("height"),
             })
+        result = db.execute("SELECT path FROM assets WHERE id=?", (shot.get("result_asset_id"),)).fetchone()
+        shot["result_path"] = result["path"] if result else None
+        latest = db.execute(
+            "SELECT id, status, progress, error FROM generation_tasks WHERE shot_id=? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1", (shot["id"],),
+        ).fetchone()
+        shot["latest_task"] = dict(latest) if latest else None
     db.close()
     return shots
 

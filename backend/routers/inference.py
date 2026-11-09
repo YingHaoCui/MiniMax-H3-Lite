@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from database import get_db, new_id
+from database import get_db
 from config import settings
 from engine_registry import active_backend
 from h3 import spec as h3
@@ -120,7 +120,7 @@ def _build_params(task_row: dict) -> dict:
             from PIL import Image
             with Image.open(first_image) as im:
                 iw, ih = im.size
-            sw = h3.SHORT_SIDE
+            sw = h3.RESOLUTION_SHORT_SIDE.get(preset, h3.SHORT_SIDE)
             cap = h3.MAX_DIM
             m = 2
             if iw >= ih:
@@ -182,8 +182,17 @@ def run_inference(task_id: str) -> dict:
         db.close()
         raise ValueError(f"任务不存在：{task_id}")
 
-    params = _build_params(dict(row))
-    backend = active_backend()
+    # Do not hold a DB connection throughout a multi-minute remote request.
+    row = dict(row)
+    if row.get("result_asset_id"):
+        asset = db.execute("SELECT path FROM assets WHERE id=?", (row["result_asset_id"],)).fetchone()
+        if asset and (settings.BASE_DIR / asset["path"]).is_file():
+            db.close()
+            return {"asset_id": row["result_asset_id"], "path": asset["path"]}
+    db.close()
+    params = _build_params(row)
+    params["task_id"] = task_id
+    backend = "vllm-omni" if row.get("remote_endpoint") else active_backend()
     if backend == "comfy":
         # B 方案：进程内复用 ComfyUI 内核（routers/comfy_engine.py）
         from routers.comfy_engine import run as run_comfy
@@ -195,7 +204,7 @@ def run_inference(task_id: str) -> dict:
     else:
         result = _run_diffusers(params)
 
-    aid = new_id("ast_")
+    aid = "ast_" + hashlib.sha256(task_id.encode()).hexdigest()[:24]
     ext = ".mp4"
     # P1-2 显式 AI 生成标识：产物文件名默认携带 _AI 后缀（config 可关闭），
     # 与隐式取证水印无关；缩略图仍用原始 aid，不受影响。
@@ -213,38 +222,44 @@ def run_inference(task_id: str) -> dict:
         raise RuntimeError(f"推理未产出有效文件：{result!r}")
 
     size = dest.stat().st_size if dest.exists() else 0
-
-    # seed 血缘回写：把最终生效 seed 写回任务 payload，任务记录与产物可追溯、可重放
-    try:
-        pl = json.loads(row["payload"]) if isinstance(row["payload"], str) else dict(row["payload"] or {})
-        pl.setdefault("params", {})
-        pl["params"]["seed"] = params["seed"]
-        db.execute(
-            "UPDATE generation_tasks SET payload=? WHERE id=?",
-            (json.dumps(pl, ensure_ascii=False), task_id),
-        )
-    except Exception:  # 尽力而为：回写失败仅记录带 task_id 的日志，不影响推理产物入库
-        _log.exception("[%s] seed 血缘回写失败（已忽略，不影响推理产物）", task_id)
-
     thumb_name = f"{aid}_thumb.jpg"
     thumb_path = settings.ASSETS_DIR / thumb_name
     if dest.exists() and size > 0:
+        # ffmpeg may take seconds: never hold SQLite's writer lock while it runs.
         _extract_thumbnail(str(dest), str(thumb_path), task_id=task_id)
+    db = get_db()
 
-    meta = json.dumps({
-        "thumbnail": f"assets/{thumb_name}" if thumb_path.exists() else None,
-        "width": params["width"],
-        "height": params["height"],
-        "duration": params["duration"],
-        "fps": params["fps"],
-        "seed": params["seed"],
-    }, ensure_ascii=False)
-    db.execute(
-        "INSERT INTO assets (id, kind, path, mime, size, meta) VALUES (?, ?, ?, ?, ?, ?)",
-        (aid, "result", f"assets/{stored_name}", "video/mp4", size, meta),
-    )
-    db.commit()
-    db.close()
+    try:
+        # seed 血缘回写：把最终生效 seed 写回任务 payload，任务记录与产物可追溯、可重放
+        try:
+            pl = json.loads(row["payload"]) if isinstance(row["payload"], str) else dict(row["payload"] or {})
+            pl.setdefault("params", {})
+            pl["params"]["seed"] = params["seed"]
+            db.execute(
+                "UPDATE generation_tasks SET payload=? WHERE id=?",
+                (json.dumps(pl, ensure_ascii=False), task_id),
+            )
+        except Exception:  # 尽力而为：回写失败仅记录带 task_id 的日志，不影响推理产物入库
+            _log.exception("[%s] seed 血缘回写失败（已忽略，不影响推理产物）", task_id)
+
+        meta = json.dumps({
+            "thumbnail": f"assets/{thumb_name}" if thumb_path.exists() else None,
+            "width": params["width"],
+            "height": params["height"],
+            "duration": params["duration"],
+            "fps": params["fps"],
+            "seed": params["seed"],
+        }, ensure_ascii=False)
+        db.execute(
+            "INSERT INTO assets (id, kind, path, mime, size, meta) VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET path=excluded.path, mime=excluded.mime, size=excluded.size, meta=excluded.meta",
+            (aid, "result", f"assets/{stored_name}", "video/mp4", size, meta),
+        )
+        # Atomically link the archived asset, so restart after this commit reuses it.
+        db.execute("UPDATE generation_tasks SET result_asset_id=? WHERE id=?", (aid, task_id))
+        db.commit()
+    finally:
+        db.close()
 
     return {"asset_id": aid, "path": f"assets/{stored_name}"}
 

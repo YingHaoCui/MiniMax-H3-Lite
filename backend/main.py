@@ -73,7 +73,13 @@ async def request_trace_middleware(request: Request, call_next):
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
 
 # 静态文件：结果视频 + 上传素材 + 前端资源（css/js/img）
-app.mount("/assets", StaticFiles(directory=str(settings.ASSETS_DIR)), name="assets")
+asset_files = StaticFiles(directory=str(settings.ASSETS_DIR))
+# A fresh Kubernetes PVC hides image-layer /app/assets, including the UI bundle.
+# Keep an immutable bundle outside that mount and prefer it over mutable media.
+web_assets = Path(__file__).resolve().parent.parent / "web-assets"
+if web_assets.is_dir():
+    asset_files.all_directories.insert(0, str(web_assets))
+app.mount("/assets", asset_files, name="assets")
 app.mount("/uploads", StaticFiles(directory=str(settings.UPLOADS_DIR)), name="uploads")
 
 # 路由

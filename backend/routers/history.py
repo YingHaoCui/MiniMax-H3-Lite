@@ -19,7 +19,8 @@ def project_history(pid: str):
         """SELECT t.id, t.shot_id, t.mode, t.status, t.progress, t.error,
                   t.result_asset_id, t.created_at, t.finished_at,
                   s.name AS shot_name, s.prompt, s.duration, s.aspect,
-                  a.path AS result_path, a.mime AS result_mime
+                  a.path AS result_path, a.mime AS result_mime, a.meta,
+                  t.payload
            FROM generation_tasks t
            JOIN shots s ON s.id = t.shot_id
            LEFT JOIN assets a ON a.id = t.result_asset_id

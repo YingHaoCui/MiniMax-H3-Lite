@@ -172,7 +172,7 @@ def test_seed_lineage_writeback_failure_logged_with_task_id(inference_env, monke
             self._conn = conn
 
         def execute(self, sql, params=()):
-            if "UPDATE generation_tasks" in sql:
+            if "UPDATE generation_tasks SET payload" in sql:
                 raise RuntimeError("boom: seed 回写失败（测试注入）")
             return self._conn.execute(sql, params)
 

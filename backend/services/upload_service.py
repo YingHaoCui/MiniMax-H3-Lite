@@ -55,7 +55,7 @@ def _probe_duration(path: Path) -> float | None:
         )
         if out.returncode == 0 and out.stdout.strip():
             return float(out.stdout.strip())
-    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         pass
     return None
 

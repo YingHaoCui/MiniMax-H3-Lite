@@ -104,6 +104,7 @@ function mockFetch(pageId, opts) {
     }
     const tid = find(RE_TASK, u);
     if (tid !== null) {
+      if (opts.taskById) return j(opts.taskById[tid]);
       if (!opts.taskFlow) return Promise.reject(new Error('unmocked ' + u));
       const t = taskPollN < opts.taskFlow.length ? opts.taskFlow[taskPollN++] : opts.taskFlow[opts.taskFlow.length - 1];
       return j(t);
@@ -122,6 +123,7 @@ function mockFetch(pageId, opts) {
     if (u === '/api/generations' && method === 'POST') {
       if (opts.submitFail) return Promise.reject(new Error('network down'));
       if (captured) captured.push(JSON.parse(body));
+      if(opts.submitByShot)return j(opts.submitByShot[JSON.parse(body).shot_id]);
       return j(opts.submitReply || { id: 't1', status: 'pending' });
     }
     return Promise.reject(new Error('unmocked ' + u));
@@ -490,7 +492,7 @@ const toastText = (d) => { const t = d.getElementById('mmh3Toast'); return t ? S
     await sleep(350);
     click(d, '#genBtn');
     await sleep(200);
-    assert(d.querySelector('#genStatus').textContent === '生成中 · 推理执行中', '提交受理 → 生成中');
+    assert(d.querySelector('#genStatus').textContent === '等待执行…', '提交受理 → 排队态');
     assert(d.querySelector('#queueItem').textContent === 'QUEUE 1 · 1', '队列彽标占用');
     assert(d.querySelector('#stageScene').classList.contains('genning'), 'setGenState 上生生成态');
     assert(d.querySelector('#previewShell').classList.contains('opened'), '剧场壳：提交即开幕（premiere）');
@@ -980,11 +982,56 @@ const toastText = (d) => { const t = d.getElementById('mmh3Toast'); return t ? S
     dom.window.close();
   }
 
+  console.log('[cloud persistence and concurrent polling]');
+  {
+    const shots=JSON.parse(JSON.stringify(shotsByPage.i2v));
+    shots[0].refs[0].path='uploads/persisted.png';
+    shots[0].result_path='assets/old.mp4';
+    shots[0].latest_task={id:'old',status:'completed'};
+    const {dom,errors}=boot('i2v',{shots});
+    await sleep(350);
+    const d=dom.window.document;
+    assert(d.querySelector('#fs-first img').src.endsWith('/uploads/persisted.png'),'刷新后首帧图片恢复');
+    assert(d.querySelector('#stageScene video').src.endsWith('/assets/old.mp4'),'刷新后旧成片恢复');
+    assert(errors.length===0,'刷新恢复无脚本错误');
+    dom.window.close();
+  }
+  {
+    const requests=[], captured=[];
+    const taskById={t1:{id:'t1',shot_id:'s1',status:'processing',progress:30},t2:{id:'t2',shot_id:'s2',status:'processing',progress:60}};
+    const {dom,errors}=boot('i2v',{requests,captured,taskById,submitByShot:{s1:{id:'t1',status:'pending'},s2:{id:'t2',status:'pending'}}});
+    const d=dom.window.document;
+    await sleep(350);
+    click(d,'#genBtn');await sleep(120);
+    click(d,'.seg[data-id="s2"]');
+    click(d,'#genBtn');await sleep(1400);
+    assert(requests.some(r=>r.url==='/api/generations/t1')&&requests.some(r=>r.url==='/api/generations/t2'),'两个任务独立轮询');
+    assert(captured.length===2,'第二镜头无需等待第一个任务结束');
+    assert(captured[1].params.i2v.first==='a1'&&captured[1].params.i2v.last==='a2','提交保留首尾帧绑定');
+    taskById.t1={id:'t1',shot_id:'s1',status:'completed',result_path:'assets/one.mp4'};
+    await sleep(1200);
+    assert(!d.querySelector('#stageScene video'),'后台完成任务不能覆盖当前镜头');
+    click(d,'.seg[data-id="s1"]');
+    assert(d.querySelector('#stageScene video').src.endsWith('/assets/one.mp4'),'切回镜头显示完成结果');
+    assert(errors.length===0,'并发任务无脚本错误');
+    dom.window.close();
+  }
+  {
+    const shots=JSON.parse(JSON.stringify(shotsByPage.i2v));
+    shots[0].latest_task={id:'resume',status:'processing',progress:12};
+    const requests=[];
+    const {dom}=boot('i2v',{shots,requests,taskById:{resume:{id:'resume',shot_id:'s1',status:'completed',result_path:'assets/resumed.mp4'}}});
+    await sleep(1500);
+    assert(requests.some(r=>r.url==='/api/generations/resume'),'刷新自动恢复未完成任务轮询');
+    assert(dom.window.document.querySelector('#stageScene video').src.endsWith('/assets/resumed.mp4'),'恢复轮询后展示结果');
+    dom.window.close();
+  }
+
   /* ============ loadHistory / escapeHtml / 面板开关 ============ */
   console.log('[history]');
   {
     const { dom, errors } = boot('t2v', { history: [
-      { name: '<b>粗体名</b>', shot_name: '', mode: 'text', duration: 8, created_at: '2026-10-01 12:00', result_path: 'outputs/h1.mp4' },
+      { name: '<b>粗体名</b>', shot_name: '', mode: 'text', duration: 8, created_at: '2026-10-01 12:00', result_path: 'outputs/h1.mp4', meta: {thumbnail: 'assets/h1.jpg'} },
       { name: '普通镜头', shot_name: '', mode: 'ref', duration: 4, created_at: '2026-10-02 09:30', result_path: null }
     ] });
     const d = dom.window.document;
@@ -995,7 +1042,10 @@ const toastText = (d) => { const t = d.getElementById('mmh3Toast'); return t ? S
     assert(items.length === 2, '渲染 2 条历史');
     const nameEl = items[0].querySelector('.hi-name');
     assert(!nameEl.querySelector('b') && nameEl.innerHTML.includes('&lt;b&gt;'), 'escapeHtml 转义历史名，不注入标记');
-    assert(!!items[0].querySelector('.history-thumb img'), '有结果路径 → 缩略图');
+    assert(items[0].querySelector('.history-thumb img').src.endsWith('/assets/h1.jpg'), '使用 JPEG 缩略图而非 MP4');
+    mclick(dom,items[0]);
+    assert(d.querySelector('#stageScene video').src.endsWith('/outputs/h1.mp4'),'历史结果可播放');
+    assert(items[0].querySelector('a[download]').href.endsWith('/outputs/h1.mp4'),'历史结果可下载');
     assert(!items[1].querySelector('.history-thumb img'), '无结果路径 → 空缩略槽');
     assert(items[1].querySelector('.hi-meta').textContent.includes('ref · 4s'), 'meta 行含模式与时长');
     click(d, '#historyBtn');

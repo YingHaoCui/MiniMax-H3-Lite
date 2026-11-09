@@ -133,3 +133,47 @@ def test_env_configuration(monkeypatch):
     assert settings.VLLM_OMNI_MODEL == "/weights/new"
     assert settings.VLLM_OMNI_POLL_INTERVAL == 7
     assert settings.TASK_RETRY_MAX == 0
+
+
+def _persistent_task():
+    from database import get_db
+    with get_db() as db:
+        db.execute("INSERT INTO projects(id) VALUES ('p')")
+        db.execute("INSERT INTO shots(id,project_id) VALUES ('s','p')")
+        db.execute("INSERT INTO generation_tasks(id,shot_id,status) VALUES ('t','s','processing')")
+
+
+def test_restart_resumes_remote_id_and_endpoint(remote, temp_db_path, monkeypatch):
+    import remote_jobs
+    requests, responses, _ = remote
+    _persistent_task()
+    responses.extend([
+        httpx.Response(202, json={"id": "video_saved", "status": "queued"}),
+        httpx.Response(200, json={"status": "in_progress", "progress": 42}),
+        httpx.ReadError("connection lost"),
+    ])
+    with pytest.raises(RuntimeError, match="connection lost"):
+        ve.run(params(task_type="t2va", task_id="t"))
+    saved = remote_jobs.load("t")
+    assert saved["remote_job_id"] == "video_saved"
+    assert saved["progress"] == 42
+    assert saved["remote_endpoint"] == "http://remote"
+    monkeypatch.setattr(ve.settings, "VLLM_OMNI_ENDPOINT", "http://replacement")
+    responses.extend([httpx.Response(200, json={"status": "completed"}), video()])
+    ve.run(params(task_type="fl2va", task_id="t"))  # no original files needed
+    assert len([r for r in requests if r.method == "POST"]) == 1
+    assert requests[-1].url.host == "remote"
+    assert requests[-1].url.path == "/v1/videos/video_saved/content"
+
+
+def test_uncertain_submission_is_not_replayed(remote, temp_db_path):
+    import remote_jobs
+    requests, responses, _ = remote
+    _persistent_task()
+    responses.append(httpx.ReadTimeout("response lost"))
+    with pytest.raises(RuntimeError):
+        ve.run(params(task_type="t2va", task_id="t"))
+    assert remote_jobs.load("t")["remote_phase"] == "submitting"
+    with pytest.raises(RuntimeError, match="outcome unknown"):
+        ve.run(params(task_type="t2va", task_id="t"))
+    assert len([r for r in requests if r.method == "POST"]) == 1

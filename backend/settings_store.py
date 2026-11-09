@@ -4,9 +4,12 @@ MM·H3 工作台 — 运行时配置持久化
 """
 import json
 import os
+import threading
+import tempfile
 from config import settings
 
 _STORE_PATH = settings.BASE_DIR / "data" / "settings.json"
+_STORE_LOCK = threading.RLock()
 
 # 允许运行时写入的键（其余仅由 config/env 提供）
 SETTABLE_KEYS = {
@@ -53,9 +56,19 @@ def _load() -> dict:
 
 def _save(data: dict):
     _STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _STORE_PATH.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    # Same-directory replace is atomic: interrupted writes retain the previous settings.
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=_STORE_PATH.parent,
+                                         suffix=".tmp", delete=False) as stream:
+            temporary = stream.name
+            json.dump(data, stream, ensure_ascii=False, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, _STORE_PATH)
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def get(key: str, default=None):
@@ -75,9 +88,10 @@ def resolve(key: str, default=None):
 def update(patch: dict) -> dict:
     """合并写入可设置键，返回完整持久化配置"""
     patch = {k: v for k, v in patch.items() if k in SETTABLE_KEYS and v is not None}
-    data = _load()
-    data.update(patch)
-    _save(data)
+    with _STORE_LOCK:
+        data = _load()
+        data.update(patch)
+        _save(data)
     return data
 
 

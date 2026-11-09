@@ -14,12 +14,18 @@ from config import settings
 #   - 库版本高于代码支持的版本 → 直接报错，避免旧代码读写新结构导致静默损坏
 #     （回滚场景：见 docs/rollback_sop.md §4）。
 # 新增结构变更时：SCHEMA_VERSION +1，并在 _MIGRATIONS 中登记该版本的 SQL 列表。
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _MIGRATIONS: dict[int, list[str]] = {
     # 0 → 1：历史库补齐（SQLite 无 ADD COLUMN IF NOT EXISTS，重复执行会报错，需幂等容错）
     1: [
         "ALTER TABLE shot_refs ADD COLUMN pair_asset_id TEXT",
+    ],
+    2: [
+        "ALTER TABLE generation_tasks ADD COLUMN remote_job_id TEXT",
+        "ALTER TABLE generation_tasks ADD COLUMN remote_endpoint TEXT",
+        "ALTER TABLE generation_tasks ADD COLUMN remote_model TEXT",
+        "ALTER TABLE generation_tasks ADD COLUMN remote_phase TEXT",
     ],
 }
 

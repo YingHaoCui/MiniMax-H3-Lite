@@ -22,17 +22,18 @@ def backoff_delay(attempt, base=1.0, cap=30.0):
     return min(max(base * 2 ** max(attempt, 0) * (0.8 + random.random() * 0.4), 0.05), cap)
 
 
-def check_health():
+def check_health(endpoint=None, model=None):
     """Require a successful health response and the configured model identity."""
-    endpoint = settings.VLLM_OMNI_ENDPOINT.rstrip("/")
+    endpoint = (endpoint or settings.VLLM_OMNI_ENDPOINT).rstrip("/")
+    model = settings.VLLM_OMNI_MODEL if model is None else model
     try:
         with httpx.Client(timeout=5, trust_env=False) as client:
             client.get(f"{endpoint}/health").raise_for_status()
             response = client.get(f"{endpoint}/v1/models")
             response.raise_for_status()
             models = [item.get("id") for item in response.json().get("data", [])]
-            if settings.VLLM_OMNI_MODEL and settings.VLLM_OMNI_MODEL not in models:
-                return {"reachable": False, "detail": f"Model mismatch: expected {settings.VLLM_OMNI_MODEL}, got {models}"}
+            if model and model not in models:
+                return {"reachable": False, "detail": f"Model mismatch: expected {model}, got {models}"}
         return {"reachable": True, "detail": f"vllm-omni ready: {models}"}
     except Exception as exc:
         return {"reachable": False, "detail": f"{type(exc).__name__}: {exc}"}
@@ -76,41 +77,56 @@ def _form(params):
 
 def run(params):
     """Return a local MP4 path for inference.py to archive."""
+    import remote_jobs
+    task_id = params.get("task_id")
+    saved = remote_jobs.load(task_id) if task_id else {}
+    job_id = saved.get("remote_job_id")
+    if saved.get("remote_phase") and not job_id:
+        raise RuntimeError("Remote submission outcome unknown; refusing duplicate POST. Check remote service logs before creating a new task.")
     paths = [params[key] for key in ("first_image", "last_image") if params.get(key)]
     if not paths:
         refs = params.get("refs") or []
         if any(ref.get("kind") != "image" for ref in refs):
             raise ValueError("This vllm-omni contract only supports image references")
         paths = [ref["path"] for ref in refs]
-    if params.get("task_type") == "fl2va" and not paths:
+    if params.get("task_type") == "fl2va" and not paths and not job_id:
         raise ValueError("I2V requires at least one reference image")
-    endpoint = settings.VLLM_OMNI_ENDPOINT.rstrip("/")
-    health = check_health()
+    endpoint = (saved.get("remote_endpoint") or settings.VLLM_OMNI_ENDPOINT).rstrip("/")
+    model = saved.get("remote_model") or settings.VLLM_OMNI_MODEL
+    health = check_health(endpoint, model)
     if not health["reachable"]:
         raise RuntimeError(f"vllm-omni 服务不可达或模型不匹配：{health['detail']}")
     deadline = time.monotonic() + settings.VLLM_OMNI_JOB_TIMEOUT
     tmp_path = settings.ASSETS_DIR / f"tmp_{uuid.uuid4().hex}.mp4"
-    job_id = None
     try:
         with ExitStack() as stack:
             client = stack.enter_context(httpx.Client(timeout=settings.VLLM_OMNI_TIMEOUT, trust_env=False))
             # Encoding form fields as multipart parts also forces multipart for T2V.
             parts = [(key, (None, value)) for key, value in _form(params).items()]
             field = "input_reference" if len(paths) == 1 else "input_references"
-            for value in paths:
+            for value in ([] if job_id else paths):
                 path = Path(value)
                 stream = stack.enter_context(path.open("rb"))
                 parts.append((field, (path.name, stream, mimetypes.guess_type(path.name)[0] or "application/octet-stream")))
-            response = client.post(f"{endpoint}/v1/videos", files=parts, timeout=_remaining(deadline))
-            response.raise_for_status()
-            job = response.json()
-            job_id = job.get("id")
-            if not isinstance(job_id, str) or not job_id:
-                raise RuntimeError("vllm-omni response missing job id")
+            if not job_id:
+                if task_id:
+                    remote_jobs.begin(task_id, endpoint, model)
+                response = client.post(f"{endpoint}/v1/videos", files=parts, timeout=_remaining(deadline))
+                response.raise_for_status()
+                job = response.json()
+                job_id = job.get("id")
+                if not isinstance(job_id, str) or not job_id:
+                    raise RuntimeError("vllm-omni response missing job id")
+                if task_id:
+                    remote_jobs.accepted(task_id, job_id)
+            else:
+                job = _get(client, f"{endpoint}/v1/videos/{quote(job_id, safe='')}", deadline).json()
             _log.info("vllm-omni submitted job_id=%s", job_id)
             job_url = f"{endpoint}/v1/videos/{quote(job_id, safe='')}"
             while True:
                 status = job.get("status")
+                if task_id:
+                    remote_jobs.progress(task_id, job)
                 if status == "completed":
                     break
                 if status == "failed":

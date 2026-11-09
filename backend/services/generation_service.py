@@ -35,6 +35,11 @@ def submit_generation(request_id: str, body: GenRequest):
     if not shot:
         db.close()
         raise HTTPException(404, "镜头不存在")
+    saved_params = json.loads(shot["params"] or "{}")
+    body.params = {"duration": shot["duration"], "aspect": shot["aspect"], **saved_params, **body.params}
+    if body.mode not in ("text", "first_frame", "last_frame", "first_last", "ref"):
+        db.close()
+        raise HTTPException(422, "不支持的生成模式")
 
     # 提示词校验
     if len(body.prompt) > settings.MAX_PROMPT_CHARS:
@@ -103,6 +108,8 @@ def submit_generation(request_id: str, body: GenRequest):
     # 幂等去重（后端服务设计评估 P0-1）：同一镜头已存在活跃任务
     # （pending/processing）时直接返回既有任务，不重复建任务——
     # 重复点击提交 / 重放请求不会产生重复推理与重复资产。
+    # Serialize check + insert across concurrent HTTP requests (SQLite writer lock).
+    db.execute("BEGIN IMMEDIATE")
     active = db.execute(
         "SELECT id FROM generation_tasks WHERE shot_id=? AND status IN ('pending','processing')"
         " ORDER BY created_at LIMIT 1",
@@ -112,6 +119,22 @@ def submit_generation(request_id: str, body: GenRequest):
         row = db.execute("SELECT * FROM generation_tasks WHERE id=?", (active["id"],)).fetchone()
         db.close()
         return row_to_dict(row)
+
+    if len(set(body.ref_ids)) != len(body.ref_ids):
+        db.close()
+        raise HTTPException(422, "参考素材不能重复")
+    for ref_id in body.ref_ids:
+        ref = db.execute(
+            "SELECT a.kind FROM assets a JOIN shot_refs r ON a.id=r.asset_id "
+            "WHERE a.id=? AND r.shot_id=?", (ref_id, body.shot_id),
+        ).fetchone()
+        if ref is None or (mode in ("first_frame", "last_frame", "first_last") and ref["kind"] != "image"):
+            db.close()
+            raise HTTPException(422, "参考素材不存在、不属于当前镜头或不是图片")
+    required = {"first_frame": 1, "last_frame": 1, "first_last": 2}.get(mode)
+    if required and len(body.ref_ids) != required:
+        db.close()
+        raise HTTPException(422, f"此模式需要 {required} 张图片")
 
     # 创建任务
     tid = new_id("task_")

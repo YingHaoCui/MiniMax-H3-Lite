@@ -23,6 +23,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=source /app /app
+RUN mkdir -p /app/web-assets && cp -a /app/assets/js /app/assets/css /app/assets/img /app/assets/favicon* /app/assets/apple-touch-icon.png /app/web-assets/
 RUN pip install -r requirements-cloud.txt && python -m compileall -q backend && \
     useradd -m -u 1000 appuser && \
     mkdir -p /app/data/checkpoints /app/assets /app/uploads /app/logs && \
