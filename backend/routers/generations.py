@@ -32,9 +32,11 @@ def get_generation(tid: str):
     data = row_to_dict(row)
     # 附带结果文件路径（assets.path = assets/xxx.mp4），供前端直接回填舞台
     if data.get("result_asset_id"):
-        a = db.execute(
-            "SELECT path FROM assets WHERE id=?", (data["result_asset_id"],)
-        ).fetchone()
+        a = row_to_dict(db.execute(
+            "SELECT path, meta FROM assets WHERE id=?", (data["result_asset_id"],)
+        ).fetchone())
         data["result_path"] = a["path"] if a else None
+        meta = a.get("meta") if a else None
+        data["result_thumbnail"] = meta.get("thumbnail") if isinstance(meta, dict) else None
     db.close()
     return data

@@ -109,6 +109,12 @@ function mockFetch(pageId, opts) {
       const t = taskPollN < opts.taskFlow.length ? opts.taskFlow[taskPollN++] : opts.taskFlow[opts.taskFlow.length - 1];
       return j(t);
     }
+    if(u.indexOf('/api/shots/')===0&&method==='DELETE'){
+      if(opts.deleteShotFail)return j({detail:'镜头仍有排队或生成中的任务'},false);
+      const sid=u.slice('/api/shots/'.length);
+      Object.keys(live).forEach(pid=>{live[pid]=live[pid].filter(shot=>shot.id!==sid);});
+      return j({deleted:sid});
+    }
     if (u.indexOf('/api/shots/') === 0 && method === 'PUT') {
       /* 真实后端会把补丁写回镜头，后续 GET /shots 可见（i2v 槽位映射依赖这一点） */
       const sid = u.slice('/api/shots/'.length);
@@ -143,6 +149,9 @@ function boot(pageId, opts) {
     virtualConsole: vc,
     beforeParse(w) {
       w.fetch = mockFetch(pageId, opts);
+      Object.defineProperty(w.HTMLMediaElement.prototype,'paused',{get(){return this._paused!==false;},configurable:true});
+      w.HTMLMediaElement.prototype.play=function(){this._paused=false;this.dispatchEvent(new w.Event('play'));return Promise.resolve();};
+      w.HTMLMediaElement.prototype.pause=function(){this._paused=true;this.dispatchEvent(new w.Event('pause'));};
       w.alert = (m) => { if (opts.logAlerts) console.log('  [alert]', m); if (opts.alerts) opts.alerts.push(String(m)); };
       w.confirm = () => opts.confirmReply !== false;
       w.prompt = () => (opts.promptReply === undefined ? null : opts.promptReply);
@@ -919,7 +928,7 @@ const toastText = (d) => { const t = d.getElementById('mmh3Toast'); return t ? S
     assert(ta.value.includes('黄昏的海岸线'), '空提示词时用内置示例兼底');
     click(d, '.pb-play');
     assert(d.querySelector('#playbar').classList.contains('playing'), 'playDemo 起播');
-    assert(/width 8s linear/.test(d.querySelector('.pb-scrub i').style.transition), 'scrub 动画时长跟随镜头时长');
+    assert(d.querySelector('#pbPlay').getAttribute('aria-label')==='暂停预览', '播放时按钮切为暂停');
     const dur = d.querySelector('#durationInput');
     dur.value = '11';
     dur.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
@@ -982,6 +991,80 @@ const toastText = (d) => { const t = d.getElementById('mmh3Toast'); return t ? S
     dom.window.close();
   }
 
+  console.log('[shot deletion and playback controls]');
+  {
+    const requests=[];
+    const shots=[{...shotsByPage.i2v[0],result_path:'assets/movie.mp4'},shotsByPage.i2v[1]];
+    const {dom,errors}=boot('i2v',{requests,shots});
+    const d=dom.window.document;await sleep(350);
+    const video=d.querySelector('#stageScene video');
+    click(d,'#pbPlay');assert(!video.paused,'预览按钮播放真实视频');
+    video.currentTime=2;video.dispatchEvent(new dom.window.Event('timeupdate'));
+    click(d,'#pbPlay');assert(video.paused&&video.currentTime===2,'再次点击暂停且保留位置');
+    assert(d.querySelector('#pbPlay').getAttribute('aria-pressed')==='false','暂停状态同步可访问属性');
+    click(d,'#tlPlay');assert(!video.paused&&video.currentTime===2,'时间线播放从暂停位置继续');
+    click(d,'#tlStop');assert(video.paused&&video.currentTime===0,'时间线停止回到开头');
+    click(d,'#pbPlay');video.pause();
+    assert(!d.querySelector('#playbar').classList.contains('playing'),'原生视频暂停同步自定义按钮');
+    click(d,'#deleteShot');await sleep(200);
+    assert(requests.some(r=>r.method==='DELETE'&&r.url==='/api/shots/s1'),'删除当前镜头调用对应接口');
+    assert(d.querySelectorAll('.seg[data-shot]').length===1&&d.querySelector('.seg.active').dataset.id==='s2','删除后选中相邻镜头');
+    assert(video.paused,'删除后旧视频停止');
+    click(d,'#deleteShot');await sleep(200);
+    assert(!d.querySelector('.seg[data-shot]')&&d.querySelector('#deleteShot').disabled,'最后一个镜头删除后禁用按钮');
+    assert(!d.querySelector('#stageScene video')&&d.querySelector('#pbShot').textContent==='未选择镜头','空项目清理预览');
+    assert(errors.length===0,'删除及播放无脚本错误');dom.window.close();
+  }
+  {
+    const {dom}=boot('t2v');const d=dom.window.document;await sleep(350);
+    click(d,'#pbPlay');await sleep(80);click(d,'#pbPlay');
+    const width=d.querySelector('.pb-scrub i').style.width;
+    await sleep(80);
+    assert(!d.querySelector('#playbar').classList.contains('playing')&&d.querySelector('.pb-scrub i').style.width===width,'无成片时预览动画也能暂停');
+    click(d,'#pbPlay');await sleep(80);
+    assert(parseFloat(d.querySelector('.pb-scrub i').style.width)>parseFloat(width),'预览动画从暂停位置继续');
+    click(d,'#tlStop');assert(d.querySelector('.pb-scrub i').style.width==='0%','停止重置预览动画');dom.window.close();
+  }
+  {
+    const requests=[];const {dom}=boot('i2v',{requests,confirmReply:false});await sleep(350);
+    click(dom.window.document,'#deleteShot');await sleep(50);
+    assert(!requests.some(r=>r.method==='DELETE'),'取消确认不删除镜头');dom.window.close();
+  }
+  {
+    const {dom}=boot('i2v',{deleteShotFail:true});await sleep(350);const d=dom.window.document;
+    click(d,'#deleteShot');await sleep(100);
+    assert(d.querySelectorAll('.seg[data-shot]').length===2&&!d.querySelector('#deleteShot').disabled,'删除失败保留镜头并恢复按钮');
+    assert(toastText(d).includes('生成中的任务'),'显示运行中任务拒绝删除原因');dom.window.close();
+  }
+
+  console.log('[timeline thumbnails and stage layering]');
+  {
+    const shots=JSON.parse(JSON.stringify(shotsByPage.i2v));
+    shots[0].refs[0].path='uploads/input.png';
+    shots[0].result_path='assets/result.mp4';
+    shots[0].result_thumbnail='assets/result_thumb.jpg';
+    shots[1].refs[0].path='uploads/second.png';
+    const {dom,errors}=boot('i2v',{shots});const d=dom.window.document;
+    const styles=d.createElement('style');styles.textContent=fs.readFileSync(path.join(ROOT,'assets/css/shared.css'),'utf-8');d.head.appendChild(styles);
+    await sleep(350);
+    const thumb=d.querySelector('.seg[data-id="s1"] .sf .shot-thumbnail');
+    assert(thumb&&thumb.src.endsWith('/assets/result_thumb.jpg'),'成片缩略图放在下方镜头栏');
+    assert(d.querySelector('.seg[data-id="s2"] .shot-thumbnail').src.endsWith('/uploads/second.png'),'无成片缩略图时使用参考图');
+    assert(!d.querySelector('#stageScene img'),'主预览区不插入缩略图');
+    assert(d.querySelector('#stageScene video').src.endsWith('/assets/result.mp4'),'主预览区仍使用 MP4 视频');
+    assert(dom.window.getComputedStyle(d.querySelector('#shotScene')).display==='none','视频展示时隐藏示意场景背景');
+    assert(dom.window.getComputedStyle(d.querySelector('.stage-mark')).display==='none','视频展示时隐藏等待生成占位层');
+    assert(dom.window.getComputedStyle(thumb).position==='absolute'&&dom.window.getComputedStyle(thumb.parentNode).overflow==='hidden','缩略图定位和裁剪限制在镜头卡片内');
+    assert(dom.window.getComputedStyle(d.querySelector('#stageScene video')).backgroundColor==='rgb(0, 0, 0)','视频留黑边时不会透出示意背景');
+    click(d,'.seg[data-id="s2"]');
+    assert(!d.querySelector('#stageScene video')&&!d.querySelector('#shotScene').hidden&&!d.querySelector('.stage-mark').hidden,'切到未生成镜头恢复空状态');
+    click(d,'.seg[data-id="s1"]');
+    assert(d.querySelectorAll('#stageScene video').length===1&&d.querySelector('.stage-mark').hidden,'切回成片仅一个视频且占位层继续隐藏');
+    thumb.dispatchEvent(new dom.window.Event('error'));
+    assert(!d.querySelector('.seg[data-id="s1"] .shot-thumbnail'),'损坏缩略图回退卡片占位，不影响视频');
+    assert(errors.length===0,'缩略图与视频切换无脚本异常');dom.window.close();
+  }
+
   console.log('[cloud persistence and concurrent polling]');
   {
     const shots=JSON.parse(JSON.stringify(shotsByPage.i2v));
@@ -1008,9 +1091,10 @@ const toastText = (d) => { const t = d.getElementById('mmh3Toast'); return t ? S
     assert(requests.some(r=>r.url==='/api/generations/t1')&&requests.some(r=>r.url==='/api/generations/t2'),'两个任务独立轮询');
     assert(captured.length===2,'第二镜头无需等待第一个任务结束');
     assert(captured[1].params.i2v.first==='a1'&&captured[1].params.i2v.last==='a2','提交保留首尾帧绑定');
-    taskById.t1={id:'t1',shot_id:'s1',status:'completed',result_path:'assets/one.mp4'};
+    taskById.t1={id:'t1',shot_id:'s1',status:'completed',result_path:'assets/one.mp4',result_thumbnail:'assets/one.jpg'};
     await sleep(1200);
     assert(!d.querySelector('#stageScene video'),'后台完成任务不能覆盖当前镜头');
+    assert(d.querySelector('.seg[data-id="s1"] .shot-thumbnail').src.endsWith('/assets/one.jpg'),'生成完成即时更新下方镜头缩略图');
     click(d,'.seg[data-id="s1"]');
     assert(d.querySelector('#stageScene video').src.endsWith('/assets/one.mp4'),'切回镜头显示完成结果');
     assert(errors.length===0,'并发任务无脚本错误');

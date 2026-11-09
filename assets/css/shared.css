@@ -752,3 +752,10 @@ body.ctrl-hide-text .stage-hint{display:none !important}
 .app-opt.on .ao-ic{color:var(--seed-accent)}
 .app-input{width:100%;margin-top:6px;padding:5px 9px;font-size:11.5px;color:var(--seed-fg);border:1px solid var(--line);border-radius:6px;background:var(--seed-bg);outline:none;transition:border-color .15s}
 .app-input:focus{border-color:var(--seed-primary)}
+.tl-delete{margin-left:auto;border:1px solid var(--line-strong);background:var(--seed-surface);color:var(--seed-text);border-radius:6px;padding:4px 9px;cursor:pointer;font:inherit}
+.tl-delete:disabled{opacity:.4;cursor:default}
+
+/* Result video owns the stage; thumbnails are confined to timeline cards. */
+.stage-scene > .result-video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:1;background:#000}
+.stage-scene > .shot-scene[hidden],.stage-scene > .stage-mark[hidden]{display:none}
+.seg .sf > .shot-thumbnail{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;pointer-events:none}

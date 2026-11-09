@@ -69,8 +69,10 @@ def list_shots(pid: str):
                 "width": meta.get("width"),
                 "height": meta.get("height"),
             })
-        result = db.execute("SELECT path FROM assets WHERE id=?", (shot.get("result_asset_id"),)).fetchone()
+        result = row_to_dict(db.execute("SELECT path, meta FROM assets WHERE id=?", (shot.get("result_asset_id"),)).fetchone())
         shot["result_path"] = result["path"] if result else None
+        meta = result.get("meta") if result else None
+        shot["result_thumbnail"] = meta.get("thumbnail") if isinstance(meta, dict) else None
         latest = db.execute(
             "SELECT id, status, progress, error FROM generation_tasks WHERE shot_id=? "
             "ORDER BY created_at DESC, rowid DESC LIMIT 1", (shot["id"],),
@@ -147,9 +149,19 @@ def update_shot(sid: str, body: ShotUpdate):
 @router.delete("/shots/{sid}")
 def delete_shot(sid: str):
     db = get_db()
-    cur = db.execute("DELETE FROM shots WHERE id=?", (sid,))
-    db.commit()
-    db.close()
-    if cur.rowcount == 0:
-        raise HTTPException(404, "镜头不存在")
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        shot = db.execute("SELECT project_id FROM shots WHERE id=?", (sid,)).fetchone()
+        if not shot:
+            raise HTTPException(404, "镜头不存在")
+        if db.execute(
+            "SELECT 1 FROM generation_tasks WHERE shot_id=? AND status IN ('pending','processing')",
+            (sid,),
+        ).fetchone():
+            raise HTTPException(409, "镜头仍有排队或生成中的任务，请等待任务结束后删除")
+        db.execute("DELETE FROM shots WHERE id=?", (sid,))
+        db.execute("UPDATE projects SET updated_at=? WHERE id=?", (now_iso(), shot["project_id"]))
+        db.commit()
+    finally:
+        db.close()
     return {"deleted": sid}

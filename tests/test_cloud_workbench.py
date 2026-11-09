@@ -43,6 +43,10 @@ def test_shot_media_and_history_survive_reload(client, temp_db_path):
         shot = client.get('/api/projects/p/shots').json()[0]
         assert shot['refs'][0]['path'] == 'uploads/frame.png'
         assert shot['result_path'] == 'assets/video.mp4'
+        assert shot['result_thumbnail'] == 'assets/thumb.jpg'
+        task = client.get('/api/generations/t').json()
+        assert task['result_path'] == 'assets/video.mp4'
+        assert task['result_thumbnail'] == 'assets/thumb.jpg'
         assert shot['latest_task']['id'] == 't'
         history = client.get('/api/projects/p/history').json()[0]
         assert history['meta']['thumbnail'] == 'assets/thumb.jpg'
