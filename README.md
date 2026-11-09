@@ -303,3 +303,7 @@ npm run test:frontend                # frontend jsdom interaction tests
 ### License
 
 Project **code** is released under Apache License 2.0. MiniMax H3 **model weights** are governed by the MiniMax Community License (including territory terms); read `docs/MODEL_LICENSE.md` and the official terms before commercial use, redistribution, or fine-tuning.
+
+### 远程 vLLM-Omni 云端部署
+
+使用 `Dockerfile.git` 通过 Git/Kaniko 构建无需 GPU 的工作台镜像。I2V 通过 multipart 上传素材，轮询远程任务并下载结果；endpoint 与模型校验名支持环境变量。部署参数、PVC 挂载、验证范围和后续缺陷修复计划见 [云端部署说明](docs/cloud-vllm-omni.md)。

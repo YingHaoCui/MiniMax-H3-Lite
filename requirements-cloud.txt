@@ -1,0 +1,10 @@
+# Remote-only web runtime; no torch / Comfy / model weights required.
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+pydantic>=2.9,<3
+python-multipart>=0.0.18
+jinja2>=3.1.4
+pillow>=10
+cryptography>=43
+httpx>=0.27,<1
+numpy>=1.26

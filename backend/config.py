@@ -46,6 +46,9 @@ class Settings:
     # ── vllm-omni 外部服务（ADR-0003，OpenAI 兼容 /v1/videos；评估 P0-2 容错参数化）──
     VLLM_OMNI_ENDPOINT: str = "http://localhost:8000"  # 外部 vllm-omni 服务地址
     VLLM_OMNI_TIMEOUT: int = 1800             # 单次 HTTP 请求超时 (秒)
+    VLLM_OMNI_MODEL: str = "/opt/doc/weights/MiniMax-H3"
+    VLLM_OMNI_POLL_INTERVAL: float = 5.0
+    VLLM_OMNI_JOB_TIMEOUT: int = 1800
     VLLM_OMNI_RETRIES: int = 2                # 传输层失败重试次数（指数退避+抖动，0=不重试）
     COMFY_SOURCE_DIR: str = ""                # (保留) Comfy 内核源码目录
     COMFY_URL: str = "http://127.0.0.1:8188"  # ComfyUI HTTP 服务地址（B 方案经此提交官方工作流）
@@ -181,6 +184,14 @@ class Settings:
             s.VLLM_OMNI_ENDPOINT = env["MMH3_VLLM_OMNI_ENDPOINT"].strip().rstrip("/")
         if env.get("MMH3_VLLM_OMNI_TIMEOUT"):
             s.VLLM_OMNI_TIMEOUT = max(10, int(env["MMH3_VLLM_OMNI_TIMEOUT"]))
+        if env.get("MMH3_VLLM_OMNI_MODEL"):
+            s.VLLM_OMNI_MODEL = env["MMH3_VLLM_OMNI_MODEL"].strip()
+        if env.get("MMH3_VLLM_OMNI_POLL_INTERVAL"):
+            s.VLLM_OMNI_POLL_INTERVAL = max(0.1, float(env["MMH3_VLLM_OMNI_POLL_INTERVAL"]))
+        if env.get("MMH3_VLLM_OMNI_JOB_TIMEOUT"):
+            s.VLLM_OMNI_JOB_TIMEOUT = max(10, int(env["MMH3_VLLM_OMNI_JOB_TIMEOUT"]))
+        if env.get("MMH3_TASK_RETRY_MAX"):
+            s.TASK_RETRY_MAX = max(0, int(env["MMH3_TASK_RETRY_MAX"]))
         if env.get("MMH3_VLLM_OMNI_RETRIES"):
             s.VLLM_OMNI_RETRIES = max(0, min(5, int(env["MMH3_VLLM_OMNI_RETRIES"])))
         for env_key, attr in (

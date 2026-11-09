@@ -1,0 +1,49 @@
+# Git-only build context for ModelDepot/Kaniko. No external COPY required.
+FROM python:3.12-slim-bookworm AS source
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ARG GIT_REPO_URL=https://github.com/YingHaoCui/MiniMax-H3-Lite.git
+ARG GIT_REF=main
+ARG GIT_TOKEN
+ARG CACHEBUST=1
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
+# Keep credentials out of clone URLs/logs and the final image. Preserve TLS verification.
+RUN printf '#!/bin/sh\ncase "$1" in *Username*) echo oauth2;; *) printf "%%s\\n" "$GIT_TOKEN";; esac\n' > /tmp/git-askpass && \
+    chmod 700 /tmp/git-askpass && \
+    echo "cachebust=${CACHEBUST}" && \
+    GIT_ASKPASS=/tmp/git-askpass GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch "$GIT_REF" "$GIT_REPO_URL" /app && \
+    rm -rf /app/.git && rm /tmp/git-askpass
+
+FROM python:3.12-slim-bookworm
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=source /app /app
+RUN pip install -r requirements-cloud.txt && python -m compileall -q backend && \
+    useradd -m -u 1000 appuser && \
+    mkdir -p /app/data/checkpoints /app/assets /app/uploads /app/logs && \
+    chown -R appuser:appuser /app
+# This image is built from source, not the upstream signed desktop release.
+# Release integrity is provided by the deployment's image digest/signing policy.
+ENV MMH3_INFERENCE_BACKEND=vllm-omni \
+    MMH3_VLLM_OMNI_ENDPOINT=http://svc-vllm-minimax-h3-4157f6-svc.default.svc.cluster.local:9098 \
+    MMH3_VLLM_OMNI_MODEL=/opt/doc/weights/MiniMax-H3 \
+    MMH3_VLLM_OMNI_TIMEOUT=1800 \
+    MMH3_VLLM_OMNI_JOB_TIMEOUT=1800 \
+    MMH3_VLLM_OMNI_POLL_INTERVAL=5 \
+    MMH3_INFERENCE_TIMEOUT=2100 \
+    MMH3_TASK_RETRY_MAX=0 \
+    MMH3_INTEGRITY_ENFORCE=false \
+    MMH3_PORT=18080
+USER appuser
+EXPOSE 18080
+VOLUME ["/app/data", "/app/assets", "/app/uploads", "/app/logs"]
+# Application liveness must not depend on GPU warmup or remote inference health.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18080/i2v', timeout=3)"
+# Exactly one worker: the current queue is process-local.
+CMD ["python", "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "18080", "--workers", "1"]

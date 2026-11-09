@@ -139,7 +139,7 @@ def health():
     return {
         "status": "ok",
         "engine": "MiniMax H3",
-        "model": settings.MODEL_NAME,
+        "model": settings.VLLM_OMNI_MODEL if active == "vllm-omni" else settings.MODEL_NAME,
         "backend": active,
         "backend_requires_external": bool(meta.get("external")),
         "quantization": settings.QUANTIZATION,

@@ -137,6 +137,8 @@ def _build_params(task_row: dict) -> dict:
     return {
         "task_type": task_type,
         "mode": mode,
+        "aspect_ratio": aspect,
+        "short_edge": h3.RESOLUTION_SHORT_SIDE.get(preset, h3.SHORT_SIDE),
         "prompt": prompt,
         "width": width,
         "height": height,
@@ -147,7 +149,7 @@ def _build_params(task_row: dict) -> dict:
         "refs": refs,
         "first_image": first_image,
         "last_image": last_image,
-        "seed": params.get("seed") or _deterministic_seed(str(task_row.get("id") or "")),
+        "seed": params.get("seed") if params.get("seed") is not None else _deterministic_seed(str(task_row.get("id") or "")),
         "ref_image_size": params.get("ref_image_size") or resolve_setting("ref_image_size", settings.REF_IMAGE_SIZE),
         "sampler_name": params.get("sampler") or resolve_setting("sampler", settings.SAMPLER_NAME),
         "steps": int(params.get("steps") or resolve_setting("steps", settings.STEPS)),
