@@ -338,6 +338,7 @@ function readbackParams(seg){
     }
     else if(k==='时长'){var durInput=r.querySelector('#durationInput');if(durInput&&params.duration!=null)durInput.value=params.duration;return;}
     else if(k==='生成尺寸')v=(params.size_mode==='follow_first'?'follow_first':'0.98M');
+    else if(k==='图片前处理')v=params.image_preprocess||'crop';
     var matched=false;
     if(v){opts.forEach(function(x){if(x.dataset.value===v){x.classList.add('on');matched=true;}});}
     if(!matched)opts[0].classList.add('on');
@@ -738,6 +739,7 @@ function getActiveParams(){
     if(k==='画面比例')p.aspect=v;
     else if(k==='分辨率')p.resolution=v||H3_RES_DEFAULT;
     else if(k==='生成尺寸')p.size_mode=(v==='follow_first'?'follow_first':'0.98M');
+    else if(k==='图片前处理')p.image_preprocess=v;
   });
   if(PAGE.id==='r2v'){
     var rs=document.querySelector('.ref-size .seg.on');

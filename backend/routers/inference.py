@@ -117,8 +117,8 @@ def _build_params(task_row: dict) -> dict:
 
     if task_type == h3.FL2VA and params.get("size_mode") == "follow_first" and first_image:
         try:
-            from PIL import Image
-            with Image.open(first_image) as im:
+            from PIL import Image, ImageOps
+            with Image.open(first_image) as source, ImageOps.exif_transpose(source) as im:
                 iw, ih = im.size
             sw = h3.RESOLUTION_SHORT_SIDE.get(preset, h3.SHORT_SIDE)
             cap = h3.MAX_DIM
@@ -149,6 +149,7 @@ def _build_params(task_row: dict) -> dict:
         "refs": refs,
         "first_image": first_image,
         "last_image": last_image,
+        "image_preprocess": params.get("image_preprocess", "crop"),
         "seed": params.get("seed") if params.get("seed") is not None else _deterministic_seed(str(task_row.get("id") or "")),
         "ref_image_size": params.get("ref_image_size") or resolve_setting("ref_image_size", settings.REF_IMAGE_SIZE),
         "sampler_name": params.get("sampler") or resolve_setting("sampler", settings.SAMPLER_NAME),

@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from database import get_db, new_id, row_to_dict
 from config import settings
+from image_preprocessing import IMAGE_PREPROCESS_MODES
 
 
 class GenRequest(BaseModel):
@@ -37,6 +38,10 @@ def submit_generation(request_id: str, body: GenRequest):
         raise HTTPException(404, "镜头不存在")
     saved_params = json.loads(shot["params"] or "{}")
     body.params = {"duration": shot["duration"], "aspect": shot["aspect"], **saved_params, **body.params}
+    body.params.setdefault("image_preprocess", "crop")
+    if body.params.get("image_preprocess", "crop") not in IMAGE_PREPROCESS_MODES:
+        db.close()
+        raise HTTPException(422, "图片前处理仅支持 original、resize 或 crop")
     if body.mode not in ("text", "first_frame", "last_frame", "first_last", "ref"):
         db.close()
         raise HTTPException(422, "不支持的生成模式")

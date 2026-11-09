@@ -39,7 +39,7 @@ def remote(monkeypatch, tmp_path):
 def params(**overrides):
     return {"task_type": "fl2va", "prompt": "moving cat", "aspect_ratio": "9:16",
             "short_edge": 736, "width": 736, "height": 1280,
-            "fps": 24, "num_frames": 107, "seed": 0, "steps": 20, **overrides}
+            "fps": 24, "num_frames": 107, "seed": 0, "steps": 20, "image_preprocess": "original", **overrides}
 
 
 def video():
@@ -177,3 +177,61 @@ def test_uncertain_submission_is_not_replayed(remote, temp_db_path):
     with pytest.raises(RuntimeError, match="outcome unknown"):
         ve.run(params(task_type="t2va", task_id="t"))
     assert len([r for r in requests if r.method == "POST"]) == 1
+
+
+@pytest.mark.parametrize('mode',['resize','crop'])
+def test_processed_double_images_sent_as_png(remote, mode):
+    from email import policy
+    from email.parser import BytesParser
+    from io import BytesIO
+    from PIL import Image
+    requests,responses,directory=remote
+    paths=[directory/'wide.jpg',directory/'tall.png']
+    for path,size in zip(paths,[(300,100),(100,300)]):
+        Image.new('RGB',size,'green').save(path)
+    originals=[path.read_bytes() for path in paths]
+    responses.extend([httpx.Response(200,json={'id':'x','status':'completed'}),video()])
+    ve.run(params(first_image=str(paths[0]),last_image=str(paths[1]),width=64,height=96,image_preprocess=mode))
+    request=next(r for r in requests if r.method=='POST')
+    message=BytesParser(policy=policy.default).parsebytes(
+        ('Content-Type: '+request.headers['content-type']+'\r\nMIME-Version: 1.0\r\n\r\n').encode()+request.content)
+    files=[part for part in message.iter_parts() if part.get_filename()]
+    assert len(files)==2
+    for part in files:
+        assert part.get_param('name',header='content-disposition')=='input_references'
+        assert part.get_content_type()=='image/png'
+        with Image.open(BytesIO(part.get_payload(decode=True))) as im:
+            assert im.size==(64,96)
+    assert [path.read_bytes() for path in paths]==originals
+    assert b'name="image_preprocess"' not in request.content  # client-only option
+
+
+def test_invalid_processed_image_never_submitted(remote):
+    requests,responses,directory=remote
+    path=directory/'invalid.png';path.write_bytes(b'not an image')
+    with pytest.raises(RuntimeError):
+        ve.run(params(first_image=str(path),image_preprocess='crop'))
+    assert not any(r.method=='POST' for r in requests)
+
+
+def test_omitted_mode_defaults_to_center_crop(remote):
+    from PIL import Image
+    from email import policy
+    from email.parser import BytesParser
+    from io import BytesIO
+    requests,responses,directory=remote
+    path=directory/'source.png'
+    with Image.new('RGB',(300,100),'red') as source:
+        source.paste('green',(100,0,200,100));source.save(path)
+    responses.extend([httpx.Response(200,json={'id':'x','status':'completed'}),video()])
+    payload=params(first_image=str(path),width=100,height=100)
+    payload.pop('image_preprocess')
+    ve.run(payload)
+    request=next(r for r in requests if r.method=='POST')
+    message=BytesParser(policy=policy.default).parsebytes(
+        ('Content-Type: '+request.headers['content-type']+'\r\n\r\n').encode()+request.content)
+    part=next(p for p in message.iter_parts() if p.get_filename())
+    with Image.open(BytesIO(part.get_payload(decode=True))) as result:
+        assert result.size==(100,100)
+        assert result.getpixel((0,0))==(0,128,0)
+        assert result.getpixel((99,99))==(0,128,0)

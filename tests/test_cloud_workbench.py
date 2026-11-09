@@ -222,3 +222,29 @@ def test_follow_first_preserves_resolution_preset(temp_db_path):
         'ref_ids':['image'], 'params':{'resolution':'0.8','size_mode':'follow_first'}
     }})
     assert result['width'] == result['height'] == result['short_edge'] == 672
+
+
+def test_image_preprocess_setting_persisted_and_validated(client,temp_db_path,monkeypatch):
+    seed_shot()
+    monkeypatch.setattr(qm,'enqueue',lambda _:None)
+    assert client.put('/api/shots/s',json={'params':{'image_preprocess':'crop'}}).status_code==200
+    shot=client.get('/api/projects/p/shots').json()[0]
+    assert shot['params']['image_preprocess']=='crop'
+    assert client.post('/api/generations',json={'shot_id':'s','params':{'image_preprocess':'bogus'}}).status_code==422
+    task=client.post('/api/generations',json={'shot_id':'s'}).json()
+    assert task['payload']['params']['image_preprocess']=='crop'
+    from routers.inference import _build_params
+    assert _build_params(task)['image_preprocess']=='crop'
+
+
+def test_default_preprocess_snapshotted_without_overwriting_explicit_mode(client,temp_db_path,monkeypatch):
+    from routers.inference import _build_params
+    seed_shot()
+    monkeypatch.setattr(qm,'enqueue',lambda _:None)
+    task=client.post('/api/generations',json={'shot_id':'s'}).json()
+    assert task['payload']['params']['image_preprocess']=='crop'
+    assert _build_params(task)['image_preprocess']=='crop'
+    with closing(get_db()) as db, db:
+        db.execute("UPDATE generation_tasks SET status='completed' WHERE id=?",(task['id'],))
+    explicit=client.post('/api/generations',json={'shot_id':'s','params':{'image_preprocess':'original'}}).json()
+    assert explicit['payload']['params']['image_preprocess']=='original'

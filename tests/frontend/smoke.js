@@ -1038,6 +1038,28 @@ const toastText = (d) => { const t = d.getElementById('mmh3Toast'); return t ? S
     assert(toastText(d).includes('生成中的任务'),'显示运行中任务拒绝删除原因');dom.window.close();
   }
 
+  console.log('[image preprocessing modes]');
+  {
+    const captured=[];const {dom,errors}=boot('i2v',{captured});const d=dom.window.document;
+    await sleep(350);
+    assert(d.querySelector('#imagePreprocessRow .seg.on').dataset.value==='crop','图片前处理默认按目标裁剪');
+    assert([...d.querySelectorAll('#imagePreprocessRow .seg')].map(x=>x.textContent).join('|')==='原图|按目标缩放|按目标裁剪','三种图片处理选项可见');
+    for(const mode of ['original','resize','crop']){
+      click(d,'#imagePreprocessRow [data-value="'+mode+'"]');
+      click(d,'#genBtn');await sleep(100);
+      assert(captured[captured.length-1].params.image_preprocess===mode,'提交图片前处理模式 '+mode);
+    }
+    click(d,'.seg[data-id="s2"]');click(d,'.seg[data-id="s1"]');
+    assert(d.querySelector('#imagePreprocessRow .seg.on').dataset.value==='crop','切换镜头回填处理模式');
+    assert(errors.length===0,'前处理选项无脚本错误');dom.window.close();
+  }
+  {
+    const shots=JSON.parse(JSON.stringify(shotsByPage.i2v));shots[0].params.image_preprocess='resize';
+    const {dom}=boot('i2v',{shots});await sleep(350);
+    assert(dom.window.document.querySelector('#imagePreprocessRow .seg.on').dataset.value==='resize','刷新后从镜头参数恢复前处理模式');
+    dom.window.close();
+  }
+
   console.log('[audible video and current preview download]');
   {
     const shots=JSON.parse(JSON.stringify(shotsByPage.i2v));

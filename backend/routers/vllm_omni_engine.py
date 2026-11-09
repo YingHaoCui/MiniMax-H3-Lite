@@ -4,16 +4,15 @@ run() blocks a queue worker, never the FastAPI request thread. POST is never
 retried: a lost response may still represent an accepted, expensive job.
 """
 import logging
-import mimetypes
 import random
 import time
 import uuid
 from contextlib import ExitStack
-from pathlib import Path
 from urllib.parse import quote
 
 import httpx
 from config import settings
+from image_preprocessing import prepare_image_upload
 
 _log = logging.getLogger(__name__)
 
@@ -105,9 +104,11 @@ def run(params):
             parts = [(key, (None, value)) for key, value in _form(params).items()]
             field = "input_reference" if len(paths) == 1 else "input_references"
             for value in ([] if job_id else paths):
-                path = Path(value)
-                stream = stack.enter_context(path.open("rb"))
-                parts.append((field, (path.name, stream, mimetypes.guess_type(path.name)[0] or "application/octet-stream")))
+                upload = prepare_image_upload(
+                    value, params.get("image_preprocess", "crop"),
+                    params.get("width"), params.get("height"), stack,
+                )
+                parts.append((field, upload))
             if not job_id:
                 if task_id:
                     remote_jobs.begin(task_id, endpoint, model)
