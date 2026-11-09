@@ -511,8 +511,9 @@ const toastText = (d) => { const t = d.getElementById('mmh3Toast'); return t ? S
     await sleep(1100);
     assert(d.querySelector('#genStatus').textContent === '生成完成 ✓' && d.querySelector('#genStatus').classList.contains('done'), 'poll completed → 完成态');
     const v = d.querySelector('#stageScene video');
-    assert(!!v && v.getAttribute('src') === '/outputs/t1.mp4' && v.loop === true && v.muted === true, 'completed → 结果视频回填舞台');
+    assert(!!v && v.getAttribute('src') === '/outputs/t1.mp4' && v.loop === true && v.muted === false && v.volume === 1, 'completed → 结果视频回填舞台且默认有声');
     assert(d.querySelector('#queueItem').textContent === 'QUEUE 0 · 0', 'completed → 队列释放');
+    assert(!d.querySelector('#downloadVideo').hidden&&d.querySelector('#downloadVideo').href.endsWith('/outputs/t1.mp4'),'生成完成后展示当前结果下载按钮');
     await sleep(1500);
     assert(!d.querySelector('#stageScene').classList.contains('genning'), '完成后延时清除 genning');
     assert(!jsdomErrors.some((e) => /Uncaught/.test(e)), '轮询期间无页面未捕获异常：' + jsdomErrors.join('|'));
@@ -1035,6 +1036,29 @@ const toastText = (d) => { const t = d.getElementById('mmh3Toast'); return t ? S
     click(d,'#deleteShot');await sleep(100);
     assert(d.querySelectorAll('.seg[data-shot]').length===2&&!d.querySelector('#deleteShot').disabled,'删除失败保留镜头并恢复按钮');
     assert(toastText(d).includes('生成中的任务'),'显示运行中任务拒绝删除原因');dom.window.close();
+  }
+
+  console.log('[audible video and current preview download]');
+  {
+    const shots=JSON.parse(JSON.stringify(shotsByPage.i2v));
+    shots[0].result_path='assets/first.mp4';
+    const {dom,errors}=boot('i2v',{shots,history:[{shot_name:'旧成片',mode:'first_frame',result_path:'assets/history.mp4'}]});
+    const d=dom.window.document;await sleep(350);
+    const video=d.querySelector('#stageScene video'),download=d.querySelector('#downloadVideo');
+    assert(!video.muted&&!video.defaultMuted&&video.volume===1,'视频默认取消静音且音量为 100%');
+    click(d,'#pbPlay');
+    assert(!video.paused&&!video.muted,'用户点击后有声播放');
+    click(d,'#pbPlay');click(d,'#tlPlay');
+    assert(!video.paused&&!video.muted,'暂停再继续不会自动静音');
+    assert(!download.hidden&&download.href.endsWith('/assets/first.mp4')&&download.download==='first.mp4','主预览下载按钮指向当前视频');
+    click(d,'.seg[data-id="s2"]');
+    assert(download.hidden&&!download.hasAttribute('href'),'未生成镜头隐藏下载并移除旧链接');
+    click(d,'.seg[data-id="s1"]');
+    assert(!download.hidden&&download.href.endsWith('/assets/first.mp4'),'切回成片恢复正确下载链接');
+    click(d,'#historyBody .history-item');
+    assert(download.href.endsWith('/assets/history.mp4')&&download.download==='history.mp4','预览历史视频时同步更新下载目标');
+    assert(!d.querySelector('#stageScene video').muted,'历史视频同样默认有声');
+    assert(errors.length===0,'有声播放及下载无脚本异常');dom.window.close();
   }
 
   console.log('[timeline thumbnails and stage layering]');

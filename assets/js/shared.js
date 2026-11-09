@@ -840,12 +840,21 @@ function showResult(path){
   stageScene.classList.toggle('has-result',!!path);
   $('shotScene').hidden=!!path;
   stageScene.querySelector('.stage-mark').hidden=!!path;
+  var download=$('downloadVideo');
+  download.hidden=!path;
+  if(path){
+    download.href=API_ORIGIN+'/'+path;
+    download.download=path.split('/').pop().split('?')[0]||'video.mp4';
+  }else{
+    download.removeAttribute('href');
+    download.removeAttribute('download');
+  }
   updatePlaybackProgress(0,previewDuration());
   if(!path)return;
   var v=document.createElement('video');
   v.src=API_ORIGIN+'/'+path;
   v.className='result-video';
-  v.controls=true;v.loop=true;v.muted=true;
+  v.controls=true;v.loop=true;v.muted=false;v.defaultMuted=false;v.volume=1;
   ['play','pause','ended','timeupdate','loadedmetadata'].forEach(function(event){
     v.addEventListener(event,function(){if(!stageScene.contains(v))return;setPlayback(!v.paused&&!v.ended);updatePlaybackProgress(v.currentTime,v.duration);});
   });

@@ -758,4 +758,7 @@ body.ctrl-hide-text .stage-hint{display:none !important}
 /* Result video owns the stage; thumbnails are confined to timeline cards. */
 .stage-scene > .result-video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:1;background:#000}
 .stage-scene > .shot-scene[hidden],.stage-scene > .stage-mark[hidden]{display:none}
+.pb-download{flex-shrink:0;padding:5px 8px;border:1px solid var(--line-strong);border-radius:6px;color:var(--seed-fg);background:var(--seed-surface);font-size:11px;text-decoration:none;white-space:nowrap}
+.pb-download:hover{border-color:var(--seed-primary);color:var(--seed-primary)}
+.pb-download[hidden]{display:none}
 .seg .sf > .shot-thumbnail{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;pointer-events:none}
