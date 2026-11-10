@@ -149,6 +149,7 @@ function boot(pageId, opts) {
     virtualConsole: vc,
     beforeParse(w) {
       w.fetch = mockFetch(pageId, opts);
+      w.FrameEditor={preview(){},open(options){w.lastFrameEditor=options;}};
       Object.defineProperty(w.HTMLMediaElement.prototype,'paused',{get(){return this._paused!==false;},configurable:true});
       w.HTMLMediaElement.prototype.play=function(){this._paused=false;this.dispatchEvent(new w.Event('play'));return Promise.resolve();};
       w.HTMLMediaElement.prototype.pause=function(){this._paused=true;this.dispatchEvent(new w.Event('pause'));};
@@ -247,14 +248,14 @@ const toastText = (d) => { const t = d.getElementById('mmh3Toast'); return t ? S
     // #advSteps 已废除，Steps 现为 #mainSteps（数字输入+滑块）
     assert(d.querySelector('#advSampler').value === 'euler' && d.querySelector('#mainSteps').value === '25' && d.querySelector('#advDenoise').value === '0.9', 'advanced params readback');
     const sizeRow = [...d.querySelectorAll('.p-row')].find(r => r.querySelector('.k') && r.querySelector('.k').textContent.trim() === '生成尺寸');
-    assert(sizeRow && sizeRow.querySelector('.seg.on').dataset.value === 'follow_first', 'size_mode readback');
+    assert(!sizeRow, '尺寸设置已收编到图像编辑器');
     click(d, '#seedRand');
     assert(/^\d+$/.test(d.querySelector('#seedInput').value), 'seed random fills numeric value');
     click(d, '#genBtn');
     await sleep(50);
     const req = captured[0];
     assert(!!req && typeof req.params.seed === 'number' && req.params.sampler === 'euler' && req.params.steps === 25 && req.params.denoise === 0.9, 'payload: seed + sampling overrides');
-    assert(req.params.size_mode === 'follow_first', 'payload: size_mode');
+    assert(req.params.size_mode === '0.98M', 'payload: 使用编辑器输出尺寸');
   }
 
   /* ============ r2v：标签体系 / ref_image_size / 配对音轨 / G6 指南 ============ */
@@ -848,16 +849,16 @@ const toastText = (d) => { const t = d.getElementById('mmh3Toast'); return t ? S
   }
   {
     const captured = [];
-    const { dom } = boot('i2v', { captured, shots: oneImgFix() });
+    const shots=oneImgFix();shots[0].params.resolution='0.6';
+    const { dom } = boot('i2v', { captured, shots });
     const d = dom.window.document;
     await sleep(350);
-    click(d, '.p-row .seg[data-value="0.6"]');
-    assert(d.querySelector('.p-row .seg.on[data-value="0.6"]'), '分辨率 chip 单选切换');
+    assert(d.querySelector('#frameEditSummary').textContent.includes('×'), '编辑器尺寸读数恢复');
     click(d, '#genBtn');
     await sleep(200);
     const p = captured[0].params;
     assert(p.resolution === '0.6' && p.size_mode === '0.98M' && p.mode === undefined && captured[0].mode === 'first_frame',
-      'i2v 提交体：分辨率/尺寸模式来自 p-row，mode 单独上送');
+      'i2v 提交体：分辨率/尺寸模式来自已保存编辑参数，mode 单独上送');
     dom.window.close();
   }
   {
@@ -883,15 +884,15 @@ const toastText = (d) => { const t = d.getElementById('mmh3Toast'); return t ? S
     const d = dom.window.document;
     await sleep(350);
     assert(errors.length === 0, 'readback: init no errors: ' + errors.join(' | '));
-    assert(d.querySelector('.p-row .seg.on[data-value="0.98"]'), '旧档位 768P → 回落原生 0.98 chip');
-    assert(/1344×768/.test(d.querySelector('#resPx').textContent), '旧档位迁移后像素读数 1344×768');
+    assert(d.querySelector('#frameEditSummary'), '旧档位在编辑器中回落原生档');
+    assert(/1344×768/.test(d.querySelector('#frameEditSummary').textContent), '旧档位迁移后像素读数 1344×768');
     assert(d.querySelector('#seedInput').value === '-1', '负种子回填为字符串');
     assert(d.querySelector('#mainSteps').value === '30', 'steps 回填主视图输入框');
     /* 脏 params（JSON 不可解）→ catch 后走默认，不报错 */
     const seg = d.querySelector('#tlSegments .seg[data-shot="0"]');
     seg.dataset.params = '{';
     mclick(dom, seg);
-    assert(d.querySelector('#seedInput').value === '' && d.querySelector('.p-row .seg.on[data-value="0.98"]'), '脏 params 不致崩，控件回默认');
+    assert(d.querySelector('#seedInput').value === '' && d.querySelector('#frameEditSummary').textContent.includes('1344×768'), '脏 params 不致崩，控件回默认');
     /* 该镜头属其他模式页 → 写 location.href 跳转（载入时自动选中已触发一次，点击再触发一次） */
     const dom2 = boot('i2v', { shots: [{ id: 'sT2', name: '跨页镜头', prompt: 't', mode: 'text', duration: 8, aspect: '16:9', params: {}, refs: [] }] });
     await sleep(350);
@@ -905,7 +906,7 @@ const toastText = (d) => { const t = d.getElementById('mmh3Toast'); return t ? S
     /* i2v 旧值 2K 同理迁移（分辨率 chip + 读数） */
     const dom3 = boot('i2v', { shots: [{ id: 'sK', name: '2K镜头', prompt: 'p', mode: 'first_frame', duration: 8, aspect: '16:9', params: { resolution: '2K' }, refs: [] }] });
     await sleep(350);
-    assert(dom3.dom.window.document.querySelector('.p-row .seg.on[data-value="0.98"]'), '旧档位 2K → 0.98');
+    assert(dom3.dom.window.document.querySelector('#frameEditSummary').textContent.includes('1344×768'), '旧档位 2K → 0.98');
     dom3.dom.window.close();
     dom.window.close();
   }
@@ -1038,26 +1039,19 @@ const toastText = (d) => { const t = d.getElementById('mmh3Toast'); return t ? S
     assert(toastText(d).includes('生成中的任务'),'显示运行中任务拒绝删除原因');dom.window.close();
   }
 
-  console.log('[image preprocessing modes]');
+  console.log('[image crop parameters]');
   {
-    const captured=[];const {dom,errors}=boot('i2v',{captured});const d=dom.window.document;
+    const shots=JSON.parse(JSON.stringify(shotsByPage.i2v));
+    shots[0].params.aspect='9:16';shots[0].params.resolution='0.8';
+    shots[0].params.image_crops={a1:{x:0.1,y:0.2,width:0.4,height:0.6}};
+    const captured=[];const {dom,errors}=boot('i2v',{shots,captured});const d=dom.window.document;
     await sleep(350);
-    assert(d.querySelector('#imagePreprocessRow .seg.on').dataset.value==='crop','图片前处理默认按目标裁剪');
-    assert([...d.querySelectorAll('#imagePreprocessRow .seg')].map(x=>x.textContent).join('|')==='原图|按目标缩放|按目标裁剪','三种图片处理选项可见');
-    for(const mode of ['original','resize','crop']){
-      click(d,'#imagePreprocessRow [data-value="'+mode+'"]');
-      click(d,'#genBtn');await sleep(100);
-      assert(captured[captured.length-1].params.image_preprocess===mode,'提交图片前处理模式 '+mode);
-    }
-    click(d,'.seg[data-id="s2"]');click(d,'.seg[data-id="s1"]');
-    assert(d.querySelector('#imagePreprocessRow .seg.on').dataset.value==='crop','切换镜头回填处理模式');
-    assert(errors.length===0,'前处理选项无脚本错误');dom.window.close();
-  }
-  {
-    const shots=JSON.parse(JSON.stringify(shotsByPage.i2v));shots[0].params.image_preprocess='resize';
-    const {dom}=boot('i2v',{shots});await sleep(350);
-    assert(dom.window.document.querySelector('#imagePreprocessRow .seg.on').dataset.value==='resize','刷新后从镜头参数恢复前处理模式');
-    dom.window.close();
+    assert(!d.querySelector('#imagePreprocessRow')&&!d.querySelector('#aspectFold'),'旧比例和拉伸控件已移除');
+    assert(d.querySelector('#frameEditSummary').textContent.includes('9:16'),'恢复竖屏取景尺寸');
+    click(d,'#genBtn');await sleep(100);
+    assert(captured[0].params.aspect==='9:16'&&captured[0].params.resolution==='0.8','竖屏比例与尺寸正确提交');
+    assert(captured[0].params.image_crops.a1.x===0.1&&captured[0].params.image_preprocess==='crop','保存的取景区域正确提交');
+    assert(errors.length===0,'裁剪参数无脚本错误');dom.window.close();
   }
 
   console.log('[audible video and current preview download]');

@@ -71,3 +71,23 @@ def test_preprocessing_honors_exif_orientation(tmp_path):
 def test_invalid_preprocessing_rejected(tmp_path,mode,width,height):
     with ExitStack() as stack, pytest.raises(ValueError):
         prepare_image_upload(tmp_path/'x.png',mode,width,height,stack)
+
+
+def test_manual_crop_selects_off_center_region(tmp_path):
+    path = tmp_path / "stripes.png"
+    stripes(path)
+    with ExitStack() as stack:
+        _, stream, _ = prepare_image_upload(path, "crop", 48, 96, stack,
+            crop={"x": 2/3, "y": 0, "width": 1/3, "height": 1})
+        with Image.open(stream) as result:
+            assert result.size == (48, 96)
+            assert result.getpixel((24, 48)) == (0, 0, 255)
+
+
+@pytest.mark.parametrize("crop", [None, {}, {"x": -1, "y": 0, "width": 1, "height": 1},
+    {"x": 0, "y": 0, "width": float("nan"), "height": 1},
+    {"x": 0.5, "y": 0, "width": 1, "height": 1}])
+def test_invalid_crop_rejected(crop):
+    from image_preprocessing import validate_crop
+    with pytest.raises(ValueError):
+        validate_crop(crop)

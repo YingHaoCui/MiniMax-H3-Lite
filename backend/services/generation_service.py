@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from database import get_db, new_id, row_to_dict
 from config import settings
-from image_preprocessing import IMAGE_PREPROCESS_MODES
+from image_preprocessing import IMAGE_PREPROCESS_MODES, validate_crop
 
 
 class GenRequest(BaseModel):
@@ -42,6 +42,15 @@ def submit_generation(request_id: str, body: GenRequest):
     if body.params.get("image_preprocess", "crop") not in IMAGE_PREPROCESS_MODES:
         db.close()
         raise HTTPException(422, "图片前处理仅支持 original、resize 或 crop")
+    try:
+        crops = body.params.get("image_crops", {})
+        if not isinstance(crops, dict):
+            raise ValueError("裁剪参数必须为对象")
+        for crop in crops.values():
+            validate_crop(crop)
+    except ValueError as exc:
+        db.close()
+        raise HTTPException(422, str(exc)) from exc
     if body.mode not in ("text", "first_frame", "last_frame", "first_last", "ref"):
         db.close()
         raise HTTPException(422, "不支持的生成模式")

@@ -42,21 +42,17 @@
       <div class="frame-slots">
         <div class="fs-slot" id="fs-first">
           <div class="fs-head"><span>首帧</span><span class="fs-tag">FIRST FRAME</span><span class="fs-state" id="fs-first-state"></span></div>
-          <div class="fs-thumb"><span class="fs-placeholder"><b>首帧 未上传</b><span>点击下方按钮上传</span></span></div>
+          <div class="fs-thumb" role="button" tabindex="0" title="点击编辑裁剪"><span class="fs-placeholder"><b>首帧 未上传</b><span>点击下方按钮上传</span></span></div>
           <button class="fs-upload" type="button" data-slot="first">＋ 上传首帧图像</button>
         </div>
         <div class="fs-slot" id="fs-last">
           <div class="fs-head"><span>末帧</span><span class="fs-tag">LAST FRAME</span><span class="fs-state" id="fs-last-state"></span></div>
-          <div class="fs-thumb"><span class="fs-placeholder"><b>末帧 未上传</b><span>点击下方按钮上传</span></span></div>
+          <div class="fs-thumb" role="button" tabindex="0" title="点击编辑裁剪"><span class="fs-placeholder"><b>末帧 未上传</b><span>点击下方按钮上传</span></span></div>
           <button class="fs-upload" type="button" data-slot="last">＋ 上传末帧图像</button>
         </div>
-        <input type="file" id="fsInput" accept="image/*" multiple style="display:none">
+        <input type="file" id="fsInput" accept="image/*" style="display:none">
       </div>
-{% include "partials/aspect_fold.html" %}
-      <div class="p-row" id="imagePreprocessRow"><span class="k">图片前处理</span><span class="v"><button type="button" class="seg" data-value="original" title="原始文件直接上传">原图</button><button type="button" class="seg" data-value="resize" title="直接缩放到目标宽高，比例不同时会拉伸">按目标缩放</button><button type="button" class="seg on" data-value="crop" title="保持比例缩放并中心裁剪到目标宽高">按目标裁剪</button></span></div>
-      <div class="bridge-note">缩放会匹配目标宽高；裁剪会保持比例并居中取景。首尾帧使用同一目标尺寸，原始文件保留。</div>
-      <div class="p-row"><span class="k">生成尺寸</span><span class="v"><span class="seg on" data-value="0.98M">0.98M 原生（默认）</span><span class="seg" data-value="follow_first">跟随首帧</span></span></div>
-      <div class="p-row"><span class="k">分辨率</span><span class="v"><span class="res-px" id="resPx" title="按所选比例 × 百万像素换算，multiple=32 · H3-Base 原生上限 0.98">16:9 → <b>1344×768</b></span><span class="seg on" data-value="0.98" title="H3 原生画布 · 16:9→1344×768（最高）">0.98M 原生</span><span class="seg" data-value="0.4" title="16:9→864×480">0.4M</span><span class="seg" data-value="0.5" title="16:9→960×544">0.5M</span><span class="seg" data-value="0.6" title="16:9→1056×608">0.6M</span><span class="seg" data-value="0.7" title="16:9→1152×640">0.7M</span><span class="seg" data-value="0.8" title="16:9→1216×672">0.8M</span><span class="seg" data-value="0.9" title="16:9→1280×736">0.9M</span></span></div>
+      <div class="bridge-note" id="frameEditSummary">点击帧图像编辑取景、画面比例与输出尺寸。首尾帧共用输出尺寸，原图保留。</div>
 {% include "partials/params_ctrl_rows.html" %}
       <div class="spec-block">
         <div class="sp-title">官方模板规格 <span class="sp-sub">MiniMax H3</span></div>
@@ -90,7 +86,7 @@
       </div>
       <div class="bridge-note">
 {% include "partials/lora_fold.html" %}
-「跟随首帧」采用官方 i2v 工作流的 Use Image Size 组（按输入图尺寸生成）；其余档位为官方 ResolutionSelector 分辨率。H3-Base 原生上限 = 0.98M（16:9 → 1344×768）。</div>
+在图像编辑弹窗中选择画面比例和分辨率，拖动裁剪框调整取景。H3-Base 原生上限 = 0.98M（16:9 → 1344×768）。</div>
 {% endblock %}
 
 {% block page_config %}

@@ -130,7 +130,8 @@ def dims_for_resolution(preset: str | None, aspect: str | None = None, multiple:
         v = ((v + multiple - 1) // multiple) * multiple
         return min(v, MAX_DIM)
 
-    return (_rc(width), _rc(height))
+    scale = min(1.0, MAX_DIM / max(width, height))
+    return (_rc(width * scale), _rc(height * scale))
 
 
 # ── 官方模型文件名（来自官方模板 + 模型卡） ────────

@@ -235,3 +235,26 @@ def test_omitted_mode_defaults_to_center_crop(remote):
         assert result.size==(100,100)
         assert result.getpixel((0,0))==(0,128,0)
         assert result.getpixel((99,99))==(0,128,0)
+
+
+def test_saved_crop_reaches_multipart_upload(remote):
+    from PIL import Image
+    from email import policy
+    from email.parser import BytesParser
+    from io import BytesIO
+    requests,responses,directory=remote
+    path=directory/'source.png'
+    with Image.new('RGB',(300,100),'red') as source:
+        source.paste('green',(100,0,200,100));source.save(path)
+    responses.extend([httpx.Response(200,json={'id':'x','status':'completed'}),video()])
+    payload=params(first_image=str(path),width=100,height=100)
+    payload['refs']=[{'path':str(path),'kind':'image','crop':{'x':0,'y':0,'width':1/3,'height':1}}]
+    ve.run(payload)
+    request=next(r for r in requests if r.method=='POST')
+    message=BytesParser(policy=policy.default).parsebytes(
+        ('Content-Type: '+request.headers['content-type']+'\r\n\r\n').encode()+request.content)
+    part=next(p for p in message.iter_parts() if p.get_filename())
+    with Image.open(BytesIO(part.get_payload(decode=True))) as result:
+        assert result.size==(100,100)
+        assert result.getpixel((0,0))==(255,0,0)
+        assert result.getpixel((99,99))==(255,0,0)

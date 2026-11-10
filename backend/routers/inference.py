@@ -92,6 +92,7 @@ def _build_params(task_row: dict) -> dict:
                     "kind": asset["kind"],
                     "path": str(settings.BASE_DIR / asset["path"]),
                     "paired_video": None,
+                    "crop": params.get("image_crops", {}).get(rid),
                 })
         pair_rows = db.execute(
             "SELECT asset_id, pair_asset_id FROM shot_refs WHERE shot_id=?",

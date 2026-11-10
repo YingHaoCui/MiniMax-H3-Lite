@@ -70,7 +70,8 @@ function dimsForResolution(preset,aspect){
   var r=H3_RATIOS[aspect]||[16,9],m=32,w,h;
   if(r[0]>=r[1]){w=sw*r[0]/r[1];h=sw;}else{h=sw*r[1]/r[0];w=sw;}
   var rd=function(v){v=Math.max(Math.floor(v),m);v=Math.ceil(v/m)*m;return Math.min(v,cap);};
-  return [rd(w),rd(h)];
+  var scale=Math.min(1,cap/Math.max(w,h));
+  return [rd(w*scale),rd(h*scale)];
 }
 
 /* ============ 展示壳 / 主题（首访引导 + 持久化） ============ */
@@ -475,17 +476,43 @@ function renderFrameSlots(){
     el.classList.toggle('disabled',slot==='first'?!wantFirst:!wantLast);
     var id=i2v[slot];
     var ref=null;refs.forEach(function(r){if(r.id===id)ref=r;});
+    var fp=frameParams(sid),dimensions=dimsForResolution(fp.resolution||H3_RES_DEFAULT,fp.aspect||'16:9');
     var thumb=el.querySelector('.fs-thumb');
     if(thumb){
       var path=id?pathMap[id]:null;
       thumb.innerHTML=path
         ?'<img src="'+API_ORIGIN+'/'+path+'" alt="'+slot+'帧预览">'
         :'<span class="fs-placeholder">'+(ref?('<b>'+slotName(slot)+'</b><span>'+escapeHtml(ref.name)+'</span>'):('<b>'+slotName(slot)+' 未上传</b><span>点击下方按钮上传</span>'))+'</span>';
+      var preview=thumb.querySelector('img');
+      if(preview&&window.FrameEditor)window.FrameEditor.preview(preview,(fp.image_crops||{})[id],dimensions);
     }
   });
+  var summary=$('frameEditSummary'),saved=frameParams(sid),d=dimsForResolution(saved.resolution||H3_RES_DEFAULT,saved.aspect||'16:9');
+  var shell=document.querySelector('.preview-shell');if(shell)shell.style.setProperty('--shell-ar',d[0]+'/'+d[1]);
+  if(summary)summary.textContent=(saved.aspect||'16:9')+' · '+d[0]+'×'+d[1]+' · 点击帧图像编辑裁剪；原图保留。';
 }
 function slotName(s){return s==='first'?'首帧':'末帧';}
 function escapeHtml(s){var d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}
+
+function frameParams(sid){var seg=findShot(sid);try{return JSON.parse(seg.dataset.params||'{}');}catch(e){return {};}}
+function editFrame(slot,sid){
+  sid=sid||activeShotId();var id=i2vSlotsFor(sid)[slot];if(!id||!pathMap[id]){uploadFrame(slot);return;}
+  var p=frameParams(sid),pid=currentProjectId;
+  window.FrameEditor.open({label:slotName(slot),url:API_ORIGIN+'/'+pathMap[id],aspect:p.aspect||'16:9',resolution:p.resolution||H3_RES_DEFAULT,crop:(p.image_crops||{})[id],dimensions:dimsForResolution,
+    save:async function(value){
+      var next=frameParams(sid),changed=value.aspect!==(p.aspect||'16:9')||value.resolution!==(p.resolution||H3_RES_DEFAULT);
+      next.image_crops=changed?{}:Object.assign({},next.image_crops||{});next.image_crops[id]=value.crop;
+      next.aspect=value.aspect;next.resolution=value.resolution;next.size_mode='0.98M';next.image_preprocess='crop';
+      var response=await fetch(API_BASE+'/shots/'+sid,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({aspect:next.aspect,params:next})});
+      if(!response.ok)throw new Error('镜头参数未保存');
+      await loadProjectShots(pid,sid);
+    }
+  });
+}
+document.querySelectorAll('.fs-thumb').forEach(function(thumb){
+  function edit(){if(!thumb.closest('.fs-slot').classList.contains('disabled'))editFrame(thumb.closest('.fs-slot').id==='fs-first'?'first':'last');}
+  thumb.addEventListener('click',edit);thumb.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();edit();}});
+});
 
 function uploadFrame(slot){
   var inp=$('fsInput');
@@ -741,6 +768,11 @@ function getActiveParams(){
     else if(k==='生成尺寸')p.size_mode=(v==='follow_first'?'follow_first':'0.98M');
     else if(k==='图片前处理')p.image_preprocess=v;
   });
+  if(PAGE.id==='i2v'){
+    var saved=frameParams(activeShotId());
+    p.aspect=saved.aspect||'16:9';p.resolution=saved.resolution||H3_RES_DEFAULT;
+    p.size_mode='0.98M';p.image_preprocess='crop';p.image_crops=saved.image_crops||{};
+  }else{p.aspect=currentAspect();}
   if(PAGE.id==='r2v'){
     var rs=document.querySelector('.ref-size .seg.on');
     if(rs)p.ref_image_size=rs.dataset.value||rs.textContent.trim();
@@ -1123,7 +1155,8 @@ if(fsInput){
     var sid=activeShotId(),slot=fsInput.dataset.slot;
     fsInput.value='';
     if(!files.length||!sid)return;
-    doUpload(files,sid,function(){
+    doUpload(files.slice(0,1),sid,function(ok){
+      if(!ok)return;
       /* 更新槽位映射并持久化到镜头 params */
       var map=i2vSlotsFor(sid);
       var seg=findShot(sid);
@@ -1134,8 +1167,9 @@ if(fsInput){
       i2vMap[sid]=map;
       p.i2v=map;
       fetch(API_BASE+'/shots/'+sid,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({params:p})})
-        .then(function(){return loadProjectShots(currentProjectId,sid);})
-        .catch(function(){});
+        .then(function(r){if(!r.ok)throw new Error('保存失败');return loadProjectShots(currentProjectId,sid);})
+        .then(function(){editFrame(slot,sid);})
+        .catch(function(){mmh3Toast('帧槽位保存失败，请重试');});
     });
   });
 }

@@ -107,6 +107,7 @@ def run(params):
                 upload = prepare_image_upload(
                     value, params.get("image_preprocess", "crop"),
                     params.get("width"), params.get("height"), stack,
+                    crop=next((ref.get("crop") for ref in params.get("refs", []) if ref["path"] == value), None),
                 )
                 parts.append((field, upload))
             if not job_id:
