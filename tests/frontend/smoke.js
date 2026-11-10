@@ -44,6 +44,7 @@ function mockFetch(pageId, opts) {
   const captured = opts.captured;
   const log = opts.requests;              // [{url, method, body}]；FormData 保留原对象供取字段
   let uploadN = 0, taskPollN = 0, cleared = false;
+  const createdProjects=[];
   // 镜头表按项目隔离，POST /shots 会追加 → 模拟真实 CRUD（addShot → loadProjectShots 链）
   // 必须深拷贝：PUT /shots 会就地改字段，浅拷贝会污染 shotsByPage 跨轮传递（同一段代码第二次 boot 读到上一轮改写值）
   const clone = (x) => JSON.parse(JSON.stringify(x));
@@ -66,7 +67,13 @@ function mockFetch(pageId, opts) {
     const body = o && o.body != null ? o.body : null;
     const j = (x, ok) => Promise.resolve({ json: () => Promise.resolve(x), ok: ok !== false, status: ok === false ? 422 : 200 });
     if (log) log.push({ url: u, method, body });
-    if (u === '/api/projects' && method === 'GET') return j(cleared ? [] : (opts.projects || [{ id: 'p1', name: 'P', shot_count: 2 }]));
+    if (u === '/api/projects' && method === 'GET') return j(cleared ? [] : (opts.projects || [{ id: 'p1', name: 'P', shot_count: 2 }]).concat(createdProjects));
+    if (u === '/api/projects' && method === 'POST') {
+      if(opts.createProjectFail)return j({detail:'创建服务暂不可用'},false);
+      if(opts.createProjectNetworkFail)return Promise.reject(new Error('网络连接失败'));
+      const project={id:'pNew',name:JSON.parse(body).name,shot_count:0};
+      createdProjects.push(project);live[project.id]=[];return j(project);
+    }
     if (u === '/api/projects/clear' && method === 'POST') {
       Object.keys(live).forEach((k) => { live[k] = []; });
       cleared = true;   /* 真实后端：清库后连项目也不存在，后续 GET /projects 返空 */
@@ -875,6 +882,31 @@ const toastText = (d) => { const t = d.getElementById('mmh3Toast'); return t ? S
   }
 
   /* ============ readbackParams：旧档位迁移 / 脏数据容错 / 跨页跳转 ============ */
+  for(const page of ['t2v','i2v','r2v']){
+    const requests=[];const {dom,errors}=boot(page,{requests,promptReply:'  新项目 <示例>  '});
+    await sleep(350);const d=dom.window.document;
+    click(d,'#projSwitch');
+    const event=new dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true});
+    d.querySelector('#projNew').dispatchEvent(event);
+    assert(!event.defaultPrevented&&d.querySelector('#projSwitch').classList.contains('open'),page+' 子按钮键盘不被父级拦截');
+    click(d,'#projNew');click(d,'#projNew');await sleep(100);
+    const posts=requests.filter(r=>r.url==='/api/projects'&&r.method==='POST');
+    assert(posts.length===1&&JSON.parse(posts[0].body).name==='新项目 <示例>',page+' 新建绑定且防重复提交');
+    assert(d.querySelector('#projName').textContent==='新项目 <示例>'&&!d.querySelector('#projSwitch').classList.contains('open'),page+' 创建后切换并关闭下拉');
+    assert(d.querySelector('#projList .active .pi-name').textContent==='新项目 <示例>',page+' 项目名称按文本显示');
+    assert(requests.some(r=>r.url==='/api/projects/pNew/shots')&&!d.querySelector('#projNew').disabled&&errors.length===0,page+' 加载新项目镜头并恢复按钮');
+    dom.window.close();
+  }
+  for(const reply of [null,'   ']){
+    const requests=[];const {dom}=boot('i2v',{requests,promptReply:reply});await sleep(350);
+    click(dom.window.document,'#projNew');await sleep(30);
+    assert(!requests.some(r=>r.url==='/api/projects'&&r.method==='POST'),'取消或空白名称不创建项目');dom.window.close();
+  }
+  for(const failure of ['createProjectFail','createProjectNetworkFail']){
+    const {dom}=boot('i2v',{promptReply:'新项目',[failure]:true});await sleep(350);const d=dom.window.document;
+    click(d,'#projNew');await sleep(80);
+    assert(d.querySelector('#projName').textContent==='P'&&!d.querySelector('#projNew').disabled&&toastText(d).includes('创建失败'),'创建失败保留原项目并可重试');dom.window.close();
+  }
   console.log('[readback]');
   {
     const { dom, errors } = boot('i2v', { shots: [
@@ -939,6 +971,27 @@ const toastText = (d) => { const t = d.getElementById('mmh3Toast'); return t ? S
   }
 
   /* ============ LoRA 槽位管理 ============ */
+  for(const page of ['t2v','r2v']){
+    const shots=JSON.parse(JSON.stringify(shotsByPage[page])).slice(0,1);
+    shots[0].params.aspect='4:3';shots[0].params.resolution='0.6';shots[0].params.duration=5;
+    const captured=[];const {dom,errors}=boot(page,{shots,captured});await sleep(350);const d=dom.window.document;
+    assert(d.querySelector('#aspectFold .seg.on').dataset.value==='4:3'&&d.querySelector('#resFold .seg.on').dataset.value==='0.6',page+' 回填折叠控件比例/分辨率');
+    assert(d.querySelector('#durationInput').value==='5'&&d.querySelector('#durationSlider').value==='5',page+' 回填时长及滑块');
+    click(d,'#resFold .seg[data-value="0.4"]');click(d,'#aspectFold .seg[data-value="9:16"]');click(d,'#genBtn');await sleep(100);
+    assert(captured[0].params.resolution==='0.4'&&captured[0].params.aspect==='9:16'&&captured[0].params.duration===5,page+' 选中值实际进入请求');
+    const help=d.querySelector('#helpDialog');help.showModal=function(){this.open=true;};click(d,'#helpBtn svg');
+    assert(help.open&&help.querySelector('form').getAttribute('method')==='dialog'&&errors.length===0,page+' 帮助图标可打开且有关闭入口');
+    dom.window.close();
+  }
+  {
+    const {dom,errors}=boot('t2v');await sleep(350);const d=dom.window.document;
+    function key(selector){d.querySelector(selector).dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));}
+    key('#historyBtn');assert(d.querySelector('#historyPanel').classList.contains('open'),'历史库支持键盘打开');key('#historyBtn');
+    key('#engineSwitch');assert(d.querySelector('#engineMenu').classList.contains('open'),'引擎菜单支持键盘打开');
+    click(d,'#engineNote');assert(d.querySelector('#engineMenu').classList.contains('open'),'引擎菜单内部点击不误触父级切换');
+    key('#aspectFold .seg[data-value="1:1"]');assert(d.querySelector('#aspectFold .seg.on').dataset.value==='1:1','比例选项键盘生效');
+    assert(errors.length===0,'控件键盘操作无异常');dom.window.close();
+  }
   console.log('[lora]');
   {
     const { dom, errors } = boot('t2v');
@@ -948,21 +1001,9 @@ const toastText = (d) => { const t = d.getElementById('mmh3Toast'); return t ? S
     assert(d.querySelector('#loraCount').textContent === '0/6', 'LoRA 初始计数 0/6');
     const slot0 = d.querySelector('.lora-slot[data-index="0"]');
     assert(slot0.textContent.includes('未选择') && !slot0.classList.contains('active'), '空槽位显示「未选择」');
-    click(d, '.lora-slot-btn[data-slot="2"]');
-    const li = d.querySelector('#loraInput');
-    assert(typeof li.onchange === 'function', '点槽位按钮挂上文件回调');
-    setFiles(dom, li, [mkFile(dom, 'styleA.safetensors', 'application/octet-stream')]);
-    fire(d, '#loraInput', 'change');
-    await sleep(80);
-    const slot2 = d.querySelector('.lora-slot[data-index="2"]');
-    assert(slot2.classList.contains('active') && slot2.querySelector('.lora-slot-name').textContent === 'styleA.safetensors', '选中 LoRA 显示文件名');
-    assert(slot2.querySelector('.lora-slot-btn').style.display === 'none', '已选槽位隐藏「＋添加」');
-    assert(d.querySelector('#loraCount').textContent === '1/6', '计数刷新 1/6');
-    const rm = slot2.querySelector('.lora-remove');
-    assert(!!rm && rm.style.display === 'block' && rm.textContent.includes('移除'), '动态生成移除按钮');
-    mclick(dom, rm);
-    await sleep(80);
-    assert(d.querySelector('#loraCount').textContent === '0/6' && !d.querySelector('.lora-slot[data-index="2"]').classList.contains('active'), '移除后回到未选择');
+    assert([...d.querySelectorAll('.lora-slot-btn')].every(b=>b.disabled&&b.title.includes('尚未接入')),'LoRA 未接通时明确禁用');
+    d.querySelector('.lora-slot-btn').click();
+    assert(d.querySelector('#loraInput').onchange===null,'禁用按钮不会假装选择成功');
     dom.window.close();
   }
 
