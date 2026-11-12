@@ -46,7 +46,8 @@ var PAGE=window.MMH3_PAGE||{id:'t2v',file:'/',mode:'text'};
 var MODE_PAGES=[
   {id:'t2v',label:'文生',sub:'T2V',file:'/'},
   {id:'i2v',label:'图生',sub:'I2V',file:'/i2v'},
-  {id:'r2v',label:'多模态参考',sub:'R2V',file:'/r2v'}
+  {id:'r2v',label:'多模态参考',sub:'R2V',file:'/r2v'},
+  {id:'images',label:'图像生成',sub:'T2I / TI2I',file:'/images'}
 ];
 var SHOT_MODE_PAGE={text:'/',first_frame:'/i2v',last_frame:'/i2v',first_last:'/i2v',ref:'/r2v'};
 var MODE_LABEL={text:'T2V',first_frame:'I2V·首',last_frame:'I2V·末',first_last:'I2V·首尾',ref:'R2V'};
@@ -416,6 +417,7 @@ function readbackParams(seg){
 
 function loadProjectShots(pid,selectId){
   return fetch(API_BASE+'/projects/'+pid+'/shots').then(function(r){return r.json();}).then(function(shots){
+    shots=shots.filter(function(s){return s.mode!=='image';});
     if(pid!==currentProjectId)return;
     var tl=$('tlSegments');
     var ctl=tl.querySelector('.tl-ctl');
@@ -973,6 +975,7 @@ function loadHistory(pid){
   var count=$('historyCount');
   if(!body)return;
   fetch(API_BASE+'/projects/'+pid+'/history').then(function(r){return r.json();}).then(function(items){
+    items=items.filter(function(it){return it.mode!=='t2i'&&it.mode!=='ti2i';});
     if(count)count.textContent=items.length+' 条';
     body.innerHTML='';
     if(!items.length){body.innerHTML='<div class="history-empty">暂无历史记录</div>';return;}

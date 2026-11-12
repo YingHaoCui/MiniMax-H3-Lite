@@ -78,3 +78,28 @@ I2V 首帧/末帧单图上传 input_reference，双图按首帧、末帧顺序�
 首尾帧共享比例与输出尺寸，更改比例或分辨率会清除另一帧旧取景并改为居中，可再打开调整。
 模型尺寸按 32 像素对齐，弹窗显示实际像素。超过 1344 长边时宽高一起缩小，避免单边截断改变宽高比。
 旧 API 的 original/resize/crop 参数保留兼容，I2V 页面统一使用裁剪编辑器。
+
+## 图像生成：统一 T2I / TI2I 页面
+
+访问 `/images`（视频页顶栏“图像生成”）。同一页面内不选参考图即 T2I，选择 1–4 张图片即 TI2I；支持调整参考顺序、宽高、steps、seed，查看历史、下载 PNG 与刷新恢复本地任务查询。图像创作与视频镜头共享项目和队列，但分别展示。
+
+部署时注入以下环境变量；模型名称不在浏览器代码中硬编码，也不由请求端覆盖：
+
+| 环境变量 | 默认 / 行为 |
+| --- | --- |
+| `MMH3_IMAGE_MODEL` | `Qwen/Qwen-Image-2.1`，应匹配服务端模型 ID |
+| `MMH3_IMAGE_ENDPOINT` | 留空沿用 `MMH3_VLLM_OMNI_ENDPOINT`；填写 origin，不包含 `/v1` |
+| `MMH3_IMAGE_API_KEY` | 可选 Bearer token，仅保留在服务端 |
+| `MMH3_IMAGE_TIMEOUT` | 1800 秒 HTTP 超时 |
+| `MMH3_IMAGE_STEPS` | 40，可在每次生成时调整 |
+| `MMH3_IMAGE_CFG_SCALE` | 1.0 |
+
+这些是进程环境变量；复制 `.env.example` 并不会自动加载到 Python 进程，需要在 shell、容器或部署平台注入。修改后重启工作台。模型 ID 和 endpoint 在提交时快照入任务；API key 不写入任务载荷。
+
+无参考图：`POST /v1/images/generations` JSON；有参考图：`POST /v1/images/edits` multipart，依序重复 `image` 字段。当前基线每次生成一张 PNG，读取 `data[0].b64_json`、解码并校验真实图片后原子写入，再与资产记录一起关联任务。上传参考原始字节保留，不套用 H3 裁剪或 RGB 转换；输出 PNG 透明通道也保留。
+
+本地接口：`GET /api/images/config`、`POST /api/image-generations`（`shot_id` 指向 `mode=image` 的创作，包含 `prompt/ref_ids/width/height/steps/seed`）；任务查询复用 `GET /api/generations/{id}`。宽高允许 256–2048，须为 32 的整数倍；服务端实际支持范围以部署版本为准。
+
+图像 API 是同步响应，本地 worker 等待结果，页面只显示排队/生成中，不伪造进度。提交前持久化日志；超时、连接中断或进程在结果归档前退出时，不能确认远程执行结果，恢复会明确失败并拒绝自动重新 POST。已归档的结果可复用。图像模型与 H3 可以通过同一网关访问，但该网关必须正确路由到加载相应模型的实例。
+
+此基线的验证使用 MockTransport 与 jsdom，不代表已验证目标集群、模型画质或实际推理耗时。

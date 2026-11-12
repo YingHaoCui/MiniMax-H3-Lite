@@ -50,6 +50,12 @@ class Settings:
     VLLM_OMNI_POLL_INTERVAL: float = 5.0
     VLLM_OMNI_JOB_TIMEOUT: int = 1800
     VLLM_OMNI_RETRIES: int = 2                # 传输层失败重试次数（指数退避+抖动，0=不重试）
+    IMAGE_ENDPOINT: str = ""                # 空值沿用 VLLM_OMNI_ENDPOINT
+    IMAGE_MODEL: str = "Qwen/Qwen-Image-2.1"
+    IMAGE_API_KEY: str = ""                 # 仅服务端使用，不返回浏览器
+    IMAGE_TIMEOUT: int = 1800
+    IMAGE_STEPS: int = 40
+    IMAGE_CFG_SCALE: float = 1.0
     COMFY_SOURCE_DIR: str = ""                # (保留) Comfy 内核源码目录
     COMFY_URL: str = "http://127.0.0.1:8188"  # ComfyUI HTTP 服务地址（B 方案经此提交官方工作流）
     COMFY_HTTP_TIMEOUT: int = 30               # ComfyUI HTTP 单次请求默认超时 (秒；评估 P2-7 外部化)
@@ -194,6 +200,15 @@ class Settings:
             s.TASK_RETRY_MAX = max(0, int(env["MMH3_TASK_RETRY_MAX"]))
         if env.get("MMH3_VLLM_OMNI_RETRIES"):
             s.VLLM_OMNI_RETRIES = max(0, min(5, int(env["MMH3_VLLM_OMNI_RETRIES"])))
+        for key in ("IMAGE_ENDPOINT", "IMAGE_MODEL", "IMAGE_API_KEY"):
+            if env.get("MMH3_" + key):
+                setattr(s, key, env["MMH3_" + key].strip())
+        for key, cast in (("IMAGE_TIMEOUT", int), ("IMAGE_STEPS", int), ("IMAGE_CFG_SCALE", float)):
+            if env.get("MMH3_" + key):
+                setattr(s, key, cast(env["MMH3_" + key]))
+        if not (10 <= s.IMAGE_TIMEOUT and 1 <= s.IMAGE_STEPS <= 100
+                and 1 <= s.IMAGE_CFG_SCALE <= 20):
+            raise ValueError("图像配置要求 timeout >= 10、steps 1–100、cfg_scale 1–20")
         for env_key, attr in (
             ("MMH3_MODEL_FL2VA", "MODEL_FL2VA"),
             ("MMH3_MODEL_REF2VA", "MODEL_REF2VA"),

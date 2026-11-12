@@ -198,7 +198,7 @@ const toastText = (d) => { const t = d.getElementById('mmh3Toast'); return t ? S
     await sleep(350);
     assert(errors.length === 0, 'init no errors: ' + errors.join(' | '));
     const tabs = [...d.querySelectorAll('#modeTabs .mtab')];
-    assert(tabs.length === 3 && tabs[0].classList.contains('on'), '3 mode tabs, t2v highlighted');
+    assert(tabs.length === 4 && tabs[0].classList.contains('on'), '4 mode tabs, t2v highlighted');
     assert(tabs[1].getAttribute('href') === '/i2v' && tabs[2].getAttribute('href') === '/r2v', 'tab links correct');
     assert(d.querySelector('#shellModal').classList.contains('open'), 'first-visit shell modal shown');
     // 展示壳现为 theater/pj 两档（SHELL_META 已移除第三档），曾为 3

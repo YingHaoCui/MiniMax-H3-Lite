@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = PROJECT_ROOT / "backend" / "templates"
 OUTPUT_DIR = PROJECT_ROOT / "tests" / "frontend" / "_rendered"
 
-PAGES = ["t2v", "i2v", "r2v"]
+PAGES = ["t2v", "i2v", "r2v", "images"]
 
 
 def main() -> None:

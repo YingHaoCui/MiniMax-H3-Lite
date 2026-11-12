@@ -192,6 +192,9 @@ def run_inference(task_id: str) -> dict:
             db.close()
             return {"asset_id": row["result_asset_id"], "path": asset["path"]}
     db.close()
+    if row["mode"] in ("t2i", "ti2i"):
+        from routers.vllm_omni_image_engine import run_task
+        return run_task(row)
     params = _build_params(row)
     params["task_id"] = task_id
     backend = "vllm-omni" if row.get("remote_endpoint") else active_backend()

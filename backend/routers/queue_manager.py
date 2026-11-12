@@ -264,7 +264,7 @@ def _run_task(task_id: str):
     log_extra = {"task_id": task_id, "request_id": request_id}
 
     from engine_registry import active_backend
-    remote = bool(row["remote_endpoint"]) or active_backend() == "vllm-omni"
+    remote = row["mode"] in ("t2i", "ti2i") or bool(row["remote_endpoint"]) or active_backend() == "vllm-omni"
     retry_max = 0 if remote else settings.TASK_RETRY_MAX
     retry_count = 0
     while retry_count <= retry_max:
@@ -392,7 +392,8 @@ def _run_task(task_id: str):
         _on_task_completed()
         # 标记模型已就绪（首次成功后），供 /api/health 暴露真实就绪度
         try:
-            runtime_state.mark_model_loaded()
+            if row["mode"] not in ("t2i", "ti2i"):
+                runtime_state.mark_model_loaded()
         except Exception:  # nosec B110
             pass
         return

@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from database import init_db
 from config import settings
 from engine_registry import active_backend, list_engines
-from routers import projects, shots, generations, uploads, history, system
+from routers import projects, shots, generations, uploads, history, system, images
 from routers import comfy_engine, vllm_omni_engine
 from logging_config import configure_logging, enable_fault_handler
 from runtime_state import is_model_loaded, orphan_inference_count
@@ -89,6 +89,7 @@ app.include_router(generations.router, prefix="/api", tags=["generations"])
 app.include_router(uploads.router, prefix="/api", tags=["uploads"])
 app.include_router(history.router, prefix="/api", tags=["history"])
 app.include_router(system.router, prefix="/api", tags=["system"])
+app.include_router(images.router, prefix="/api", tags=["images"])
 
 
 # ---- 页面路由（Jinja2 模板，单端口直出） ----
@@ -107,6 +108,11 @@ def page_i2v(request: Request):
 @app.get("/r2v", response_class=HTMLResponse, include_in_schema=False)
 def page_r2v(request: Request):
     return templates.TemplateResponse(request, "r2v.html", {"app_version": APP_VERSION})
+
+
+@app.get("/images", response_class=HTMLResponse, include_in_schema=False)
+def page_images(request: Request):
+    return templates.TemplateResponse(request, "images.html", {"app_version": APP_VERSION})
 
 
 @app.on_event("startup")

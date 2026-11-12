@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>图像生成 · Lite 工作台</title>
+  <link rel="icon" href="/assets/favicon.svg">
+  <link rel="stylesheet" href="/assets/css/images.css">
+  <script src="/assets/js/images.js" defer></script>
+</head>
+<body>
+<header><a class="brand" href="/">Lite 工作台</a><nav aria-label="生成模式">
+  <a href="/">T2V</a><a href="/i2v">I2V</a><a href="/r2v">R2V</a>
+  <a href="/images" aria-current="page">图像生成 · T2I / TI2I</a>
+</nav><small>v{{ app_version }}</small></header>
+<main>
+  <section class="heading"><div><span class="eyebrow">IMAGE STUDIO</span><h1>从想法，到画面。</h1>
+    <p>直接描述生成图片，或加入参考图继续创作。</p></div><span id="model" class="model">正在读取模型…</span></section>
+  <div class="workspace">
+    <section class="controls" aria-label="创作设置">
+      <div class="project-row"><label for="project">项目</label><select id="project"></select><button id="new-project" type="button">新建</button></div>
+      <div class="project-row"><label for="creation">创作</label><select id="creation"></select><button id="new-creation" type="button">新建</button></div>
+      <form id="image-form">
+        <label for="prompt">画面描述 <span id="mode">T2I · 文生图</span></label>
+        <textarea id="prompt" required maxlength="7000" rows="6" placeholder="描述画面，或说明希望如何修改参考图…"></textarea>
+        <div class="ref-title"><label for="references">参考图片 <small>可选，最多 4 张</small></label><input id="references" type="file" accept="image/png,image/jpeg,image/webp" multiple></div>
+        <p class="hint">勾选图片作为参考；向左移动可调整引用顺序。原图保留，不强制裁剪。</p>
+        <div id="reference-list" class="references"></div>
+        <div class="params">
+          <label>宽度<input id="width" type="number" min="256" max="2048" step="32" value="1024" required></label>
+          <label>高度<input id="height" type="number" min="256" max="2048" step="32" value="1024" required></label>
+          <label>采样步数<input id="steps" type="number" min="1" max="100" value="40" required></label>
+          <label>种子<input id="seed" type="number" min="0" max="4294967295" step="1" placeholder="留空随机"></label>
+        </div>
+        <button id="generate" class="primary" type="submit">生成图片</button>
+      </form>
+      <p id="status" role="status" aria-live="polite">正在加载…</p>
+    </section>
+    <section class="preview" aria-label="生成结果"><div id="empty"><span>你的下一幅作品</span><p>生成完成后将在这里显示</p></div>
+      <img id="result" alt="AI 生成图片" hidden><a id="download" hidden download>下载图片 · AI 生成</a>
+    </section>
+  </div>
+  <section class="history"><h2>创作历史 <small>点击查看图片与生成参数</small></h2><div id="history-list"></div></section>
+</main>
+</body></html>
